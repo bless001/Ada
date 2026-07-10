@@ -74,4 +74,4 @@ Set `enable_autonomous_mode` to `true` in `config.json` to enable autonomous ope
 
 ## License
 
-MIT
+Apache 2.0
