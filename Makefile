@@ -1,5 +1,5 @@
 setup:
-	python scripts/generate_env.py
+	python infra/scripts/generate_env.py
 	mkdir -p models workspace
 
 up:
@@ -25,7 +25,7 @@ restart-provision:
 	docker compose up openproject-provision
 
 test-webhook:
-	bash scripts/test_webhook.sh
+	bash infra/scripts/test_webhook.sh
 
 show-token:
-	bash scripts/show_bot_token.sh
+	bash infra/scripts/show_bot_token.sh
