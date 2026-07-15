@@ -328,14 +328,25 @@ services:
     container_name: ca-planning-agent-core
     restart: unless-stopped
     command: ["uvicorn", "planning_agent_core.main:app", "--host", "0.0.0.0", "--port", "8000"]
-    environment:                                                                                                                      
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_APP_DB}
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_APP_DB}
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=${NEO4J_USER}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
       - WEAVIATE_URL=http://weaviate:8080
       - OPENPROJECT_BASE_URL=http://openproject
       - OPENPROJECT_API_TOKEN_FILE=/agent-secrets/openproject_api_token
+      - APP_ENV=development
+      - LLM_BASE_URL=http://localhost:8080/v1
+      - LLM_MODEL=local-coding-model
+      - LLM_API_KEY=local
+      - OPENPROJECT_API_KEY=placeholder-key
+      - NEO4J_DATABASE=neo4j
+      - WEAVIATE_HTTP_HOST=weaviate
+      - WEAVIATE_HTTP_PORT=8080
+      - WEAVIATE_GRPC_HOST=weaviate
+      - WEAVIATE_GRPC_PORT=50051
+      - WEAVIATE_SECURE=false
     ports:
       - "8000:8000"
     depends_on:
