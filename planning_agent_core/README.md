@@ -83,3 +83,60 @@ planning_agent_core/adapters/  OpenProject, Neo4j, Weaviate adapters
 This is a serious MVP scaffold. It includes complete schemas and working API routes for project creation, document upload/chunking, planning sessions, question answering, plan drafting, approval, context capsule generation, and provisioning job creation.
 
 The LLM and external systems are integration points. The code includes safe deterministic fallback planning when the local LLM endpoint is unavailable.
+
+
+## To start planning with a document as input, you would call:
+
+POST /v1/planning/sessions
+
+## This is the main endpoint that initiates a planning session. Here's how to use it:
+
+Request Format:
+```
+ HTTP
+POST /v1/planning/sessions
+Content-Type: application/json
+JSON
+{
+  "project_key": "your-project-key",
+  "input_mode": "document",
+  "original_request": "Your planning request or goal",
+  "intake": {
+    "document_id": "uuid-of-the-uploaded-document"
+  }
+} 
+```
+
+Step-by-step process:
+First, upload your document using:
+```
+HTTP
+POST /v1/documents/upload?project_key=your-project-key
+Then, start a planning session with:
+
+HTTP
+POST /v1/planning/sessions
+Optionally, if clarification questions arise, answer them with:
+
+HTTP
+POST /v1/planning/sessions/{session_id}/answers
+Finally, draft the plan:
+
+HTTP
+POST /v1/planning/sessions/{session_id}/draft-plan
+Example using curl:
+```
+# Start planning session with document
+```
+curl -X POST "http://localhost:8000/v1/planning/sessions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_key": "coding-agent",
+    "input_mode": "document",
+    "original_request": "Create a web application for managing tasks",
+    "intake": {
+      "document_id": "123e4567-e89b-12d3-a456-426614174000"
+    }
+  }'
+```
+The system will automatically process your document and generate a plan based on the content, following the hierarchical structure (Vision → Capability → Epic → Story → Task) as defined in the planner system prompt.

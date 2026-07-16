@@ -19,6 +19,7 @@ from planning_agent_core.models import (
 )
 from planning_agent_core.prompts import AMBIGUITY_SYSTEM, PLANNER_SYSTEM
 from planning_agent_core.schemas import PlanningSessionCreate, ProjectPlanSpec
+from planning_agent_core.enums import PlanningSessionStatus
 
 
 class ClarificationQuestionSpec(BaseModel):
@@ -56,6 +57,55 @@ class PlanningService:
         await self.db.commit()
         await self.db.refresh(session)
         return await self.assess_ambiguity(session.id)
+    
+    async def load_session_context(self, session_id: UUID) -> dict:
+        session = await self.db.get(PlanningSession, session_id)
+        if not session:
+            raise KeyError(f"Planning session not found: {session_id}")
+
+        project = await self.db.get(Project, session.project_id)
+        if not project:
+            raise KeyError(f"Project not found for session: {session_id}")
+
+        return {
+            "session_id": session.id,
+            "project_id": project.id,
+            "project_key": project.project_key,
+            "original_request": session.original_request or "",
+            "input_mode": session.input_mode,
+            "intake": session.intake_json or {},
+        }
+
+    async def save_questions_from_graph(
+        self,
+        *,
+        session_id: UUID,
+        project_id: UUID,
+        questions: list[dict],
+    ) -> None:
+        session = await self.db.get(PlanningSession, session_id)
+        session.status = PlanningSessionStatus.NEEDS_CLARIFICATION
+
+        for q in questions:
+            self.db.add(
+                ClarificationQuestion(
+                    project_id=project_id,
+                    planning_session_id=session_id,
+                    question_key=q["question_key"],
+                    question=q["question"],
+                    reason=q["reason"],
+                    blocking=q.get("blocking", True),
+                    answer_format=q.get("answer_format"),
+                    status="open",
+                )
+            )
+
+        await self.db.commit()
+
+    async def mark_ready_for_planning(self, session_id: UUID) -> None:
+        session = await self.db.get(PlanningSession, session_id)
+        session.status = PlanningSessionStatus.READY_FOR_PLANNING
+        await self.db.commit()
 
     async def assess_ambiguity(self, session_id: UUID) -> PlanningSession:
         session = await self.db.get(PlanningSession, session_id)
