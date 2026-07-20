@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     neo4j_password: str
     neo4j_database: str = "neo4j"
 
+    checkpoint_database_url: str | None = None
+
     weaviate_http_host: str = "localhost"
     weaviate_http_port: int = 8080
     weaviate_grpc_host: str = "localhost"

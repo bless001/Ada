@@ -8,17 +8,29 @@ from planning_agent_core.workflow.graph import build_planning_graph
 
 
 class PlanningWorkflowRunner:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, checkpointer, store):
         self.db = db
+        self.checkpointer = checkpointer
+        self.store = store
 
     async def run(self, session_id: UUID) -> dict:
-        graph = build_planning_graph(self.db)
+        graph = build_planning_graph(
+            db=self.db,
+            checkpointer=self.checkpointer,
+            store=self.store,
+        )
 
-        result = await graph.ainvoke(
+        config = {
+            "configurable": {
+                "thread_id": f"planning-session-{session_id}",
+                "checkpoint_ns": "planning",
+            }
+        }
+
+        return await graph.ainvoke(
             {
                 "session_id": session_id,
                 "errors": [],
-            }
+            },
+            config=config,
         )
-
-        return result
