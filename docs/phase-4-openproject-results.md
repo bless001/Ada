@@ -13,6 +13,9 @@ Baseline date: 2026-07-21
 - Added comment idempotency markers in the form `<!-- ada:openproject-idempotency: ... -->`.
 - Added OpenProject feedback classification for agent echo, human comments, approvals, requirement changes, plan feedback, rework, pause, resume, and cancellation.
 - Updated planning resume decisions to ignore self-generated OpenProject echo webhooks.
+- Added semantic mapping for OpenProject work-package types, statuses, priorities, approvals, feedback intents, and verification outcomes.
+- Added `OpenProjectSemanticMapper` and `OpenProjectResourceCatalog` so provisioning can resolve names to HAL links without hard-coded numeric IDs.
+- Added OpenProject adapter discovery methods for types, statuses, priorities, and resource-catalog loading.
 - Updated the opt-in live PostgreSQL integration test to expect Alembic head `0005_op_outbound_ops`.
 
 ## Runtime Compatibility Notes
@@ -21,7 +24,9 @@ Baseline date: 2026-07-21
 - Repeated outbound idempotency keys return the prior successful response and do not issue another OpenProject HTTP request.
 - Failed or pending outbound operation records are not automatically retried in this slice; retry policy for external mutations should be explicit because network failures can happen after OpenProject accepted a write.
 - The trigger-side legacy OpenProject client remains as reference code, but the active event worker delegates orchestration to planning core.
-- Feedback classification is deterministic and marker-based; detailed OpenProject type/status/custom-field mapping remains future Phase 4 work.
+- Feedback classification is deterministic and marker-based.
+- Semantic mapping is name-based and fails clearly when provisioning has not supplied a required OpenProject type, status, or priority link.
+- Vision and Capability plan nodes are not projected as work packages by default; the default OpenProject hierarchy starts at Epic, then Story, then Task.
 
 ## Verification
 
@@ -29,13 +34,13 @@ Focused Phase 4 command:
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
-.venv\Scripts\python.exe -m pytest -q tests/test_phase4_openproject_adapter.py tests/test_phase3_project_orchestrator.py
+.venv\Scripts\python.exe -m pytest -q tests/test_phase4_openproject_mapping.py tests/test_phase4_openproject_adapter.py tests/test_phase3_project_orchestrator.py
 ```
 
 Result:
 
 ```text
-18 passed in 0.40s
+24 passed in 0.38s
 ```
 
 Full suite command:
@@ -48,7 +53,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-60 passed, 3 skipped, 4 warnings in 1.30s
+66 passed, 3 skipped, 4 warnings in 1.21s
 ```
 
 Live PostgreSQL command:
@@ -79,7 +84,6 @@ Alembic history:
 
 ## Remaining Phase 4 Work
 
-- Add semantic mapping for OpenProject work-package types, statuses, priorities, approvals, and verification states.
 - Persist reconciliation snapshots that preserve human edits before agent updates.
 - Upsert `ExternalArtifact` mappings as projection workflows create or discover OpenProject work packages.
 - Add approval records and explicit resume logic for planning and task-completion approvals.

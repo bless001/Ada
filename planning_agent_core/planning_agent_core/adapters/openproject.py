@@ -11,6 +11,7 @@ from planning_agent_core.application.openproject_feedback import (
     markdown_with_idempotency_marker,
     openproject_idempotency_marker,
 )
+from planning_agent_core.application.openproject_mapping import OpenProjectResourceCatalog
 from planning_agent_core.config import settings
 from planning_agent_core.ports.openproject import (
     OpenProjectOperationClaim,
@@ -105,8 +106,22 @@ class OpenProjectClient:
 
     async def list_types(self) -> dict[str, str]:
         data = await self.request("GET", "/types")
-        elements = data.get("_embedded", {}).get("elements", [])
-        return {e["name"].strip().lower(): e["_links"]["self"]["href"] for e in elements}
+        return _hal_elements_by_name(data)
+
+    async def list_statuses(self) -> dict[str, str]:
+        data = await self.request("GET", "/statuses")
+        return _hal_elements_by_name(data)
+
+    async def list_priorities(self) -> dict[str, str]:
+        data = await self.request("GET", "/priorities")
+        return _hal_elements_by_name(data)
+
+    async def load_resource_catalog(self) -> OpenProjectResourceCatalog:
+        return OpenProjectResourceCatalog(
+            type_hrefs=await self.list_types(),
+            status_hrefs=await self.list_statuses(),
+            priority_hrefs=await self.list_priorities(),
+        )
 
     async def get_work_package(self, work_package_id: str) -> dict[str, Any]:
         return await self.request("GET", f"/work_packages/{work_package_id}")
@@ -229,6 +244,15 @@ def _work_package_id_from_payload(payload: dict[str, Any]) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _hal_elements_by_name(data: dict[str, Any]) -> dict[str, str]:
+    elements = data.get("_embedded", {}).get("elements", [])
+    return {
+        item["name"].strip(): item["_links"]["self"]["href"]
+        for item in elements
+        if item.get("name") and item.get("_links", {}).get("self", {}).get("href")
+    }
 
 
 def _skipped_response(claim: OpenProjectOperationClaim) -> dict[str, Any]:

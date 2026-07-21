@@ -165,6 +165,62 @@ def test_openproject_adapter_loads_token_file_and_marks_comments(tmp_path):
     assert has_openproject_idempotency_marker(marked, "op:comment:1")
 
 
+@pytest.mark.asyncio
+async def test_openproject_adapter_loads_resource_catalog_from_hal_collections():
+    http_client = FakeHttpClient(
+        [
+            FakeResponse(
+                {
+                    "_embedded": {
+                        "elements": [
+                            {
+                                "name": "Task",
+                                "_links": {"self": {"href": "/api/v3/types/3"}},
+                            }
+                        ]
+                    }
+                }
+            ),
+            FakeResponse(
+                {
+                    "_embedded": {
+                        "elements": [
+                            {
+                                "name": "In progress",
+                                "_links": {"self": {"href": "/api/v3/statuses/5"}},
+                            }
+                        ]
+                    }
+                }
+            ),
+            FakeResponse(
+                {
+                    "_embedded": {
+                        "elements": [
+                            {
+                                "name": "Normal",
+                                "_links": {"self": {"href": "/api/v3/priorities/2"}},
+                            }
+                        ]
+                    }
+                }
+            ),
+        ]
+    )
+    client = OpenProjectClient(http_client=http_client)
+
+    catalog = await client.load_resource_catalog()
+
+    assert catalog.type_hrefs == {"Task": "/api/v3/types/3"}
+    assert catalog.status_hrefs == {"In progress": "/api/v3/statuses/5"}
+    assert catalog.priority_hrefs == {"Normal": "/api/v3/priorities/2"}
+    assert [request["path"] for request in http_client.requests] == [
+        "/types",
+        "/statuses",
+        "/priorities",
+    ]
+
+
 def test_openproject_feedback_classifier_ignores_agent_echo_comments():
     envelope = EventEnvelope(
         source="openproject",
