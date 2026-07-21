@@ -130,9 +130,9 @@ class ProjectEventOrchestrator:
                 thread_id=thread_id,
                 trigger_event_id=event_id,
                 config_snapshot={
+                    "workflow": "planning",
                     "event_source": envelope.source,
                     "event_type": envelope.event_type,
-                    "checkpoint_ns": "planning",
                 },
             )
 

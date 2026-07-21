@@ -150,9 +150,9 @@ async def test_project_orchestrator_records_planning_execution_for_resume():
             "thread_id": f"planning-session-{session_id}",
             "trigger_event_id": event_id,
             "config_snapshot": {
+                "workflow": "planning",
                 "event_source": "openproject",
                 "event_type": "work_package.comment_created",
-                "checkpoint_ns": "planning",
             },
         }
     ]

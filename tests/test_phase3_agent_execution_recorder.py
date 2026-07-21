@@ -46,7 +46,7 @@ async def test_agent_execution_recorder_starts_incremented_attempt():
         agent_name="planning",
         thread_id="planning-session-1",
         trigger_event_id=str(event_id),
-        config_snapshot={"checkpoint_ns": "planning"},
+        config_snapshot={"workflow": "planning"},
     )
 
     execution = session.added[0]
@@ -58,7 +58,7 @@ async def test_agent_execution_recorder_starts_incremented_attempt():
     assert execution.trigger_event_id == event_id
     assert execution.attempt_number == 3
     assert execution.status == AgentExecutionStatus.RUNNING.value
-    assert execution.config_snapshot == {"checkpoint_ns": "planning"}
+    assert execution.config_snapshot == {"workflow": "planning"}
     assert execution.started_at is not None
     assert session.flushed == 1
 

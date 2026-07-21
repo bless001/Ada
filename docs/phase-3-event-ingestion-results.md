@@ -50,6 +50,7 @@ Baseline date: 2026-07-21
 - The core orchestrator resumes planning with the existing `planning-session-{session_id}` LangGraph thread ID, so checkpoint resume can work once a durable checkpointer is configured.
 - The LangGraph setup script loads `.env` by default and redacts credentials in output.
 - The setup script normalizes `postgresql+asyncpg://` to `postgresql://`, matching the driver expected by LangGraph's Postgres checkpointer.
+- The planning workflow now uses the stable `planning-session-{session_id}` LangGraph `thread_id` without a top-level `checkpoint_ns`; current LangGraph treats that namespace as a subgraph lookup during state restoration.
 - OpenProject event-to-project resolution currently depends on `ExternalArtifact` mappings for `project` or `work_package` artifacts.
 - Feedback classification is intentionally coarse in this slice; detailed requirement-change, approval, pause, resume, and cancellation semantics remain Phase 4 work.
 - `create_schema()` remains in planning-core startup, so Alembic is scaffolded but not yet enforced at service startup.
@@ -106,23 +107,35 @@ Result:
 
 ## Remaining Phase 3 Work
 
-- Run migrations and duplicate webhook integration tests against a clean PostgreSQL database when a live database is available.
 - Retire or narrow `agent_jobs` after the standalone trigger worker is migrated to the shared core execution path.
-- Run the opt-in LangGraph restart test against a real PostgreSQL database by setting `LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL`.
 - Add visible OpenProject dead-letter comments once outbound OpenProject writes have idempotency markers.
 
-## Live PostgreSQL Attempt
+## Live PostgreSQL Verification
 
-Command attempted:
+Docker engine:
+
+```text
+29.1.3
+```
+
+Command:
 
 ```powershell
-docker run --rm -d --name ada-phase3-pg-$PID -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=ada_phase3 -p 127.0.0.1::5432 postgres:17-alpine
+$name = "ada-phase3-pg-$PID"
+docker run --rm -d --name $name -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=ada_phase3 -p 127.0.0.1::5432 postgres:17-alpine
+$env:PHASE3_POSTGRES_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@127.0.0.1:<port>/ada_phase3"
+$env:LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:<port>/ada_phase3"
+.venv\Scripts\python.exe -m pytest -q tests/test_phase3_postgres_integration.py tests/test_phase3_langgraph_persistence.py::test_langgraph_postgres_checkpoint_survives_recreated_checkpointer
+docker rm -f $name
 ```
 
 Result:
 
 ```text
-failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine
+3 passed in 2.82s
 ```
 
-Docker CLI is installed, but Docker Desktop/Linux engine was not running in this environment.
+Issues found and fixed during the live run:
+
+- On Windows, psycopg async cannot run on the default proactor event loop; `tests/conftest.py` now sets `WindowsSelectorEventLoopPolicy` for pytest on Windows.
+- `checkpoint_ns="planning"` caused LangGraph state restoration to look for a subgraph named `planning`; `PlanningWorkflowRunner` now relies on the stable `thread_id` only.

@@ -129,7 +129,6 @@ async def test_planning_workflow_runner_uses_stable_resume_config(monkeypatch):
     assert captured["config"] == {
         "configurable": {
             "thread_id": f"planning-session-{session_id}",
-            "checkpoint_ns": "planning",
         }
     }
 
@@ -193,7 +192,6 @@ async def test_langgraph_postgres_checkpoint_survives_recreated_checkpointer():
     config = {
         "configurable": {
             "thread_id": f"restart-test-{uuid4()}",
-            "checkpoint_ns": "planning",
         }
     }
 

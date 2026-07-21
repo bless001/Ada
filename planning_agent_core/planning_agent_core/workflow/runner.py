@@ -23,7 +23,6 @@ class PlanningWorkflowRunner:
         config = {
             "configurable": {
                 "thread_id": f"planning-session-{session_id}",
-                "checkpoint_ns": "planning",
             }
         }
 

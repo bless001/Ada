@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
 
 
 def pytest_configure() -> None:
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     repo_root = Path(__file__).resolve().parents[1]
     package_root = repo_root / "planning_agent_core"
     if str(package_root) not in sys.path:
