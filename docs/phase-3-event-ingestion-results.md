@@ -24,8 +24,12 @@ Baseline date: 2026-07-21
 - Added terminal `dead_letter` recording for non-retryable failures or exhausted attempts.
 - Added `ProjectEventOrchestrator` to load persisted inbox events, resolve local project mappings, and route resumable OpenProject feedback into the planning workflow runner.
 - Added `POST /v1/events/{event_id}/orchestrate` as a manual core entry point for persisted-event orchestration.
+- Added explicit LangGraph persistence setup command at `infra/scripts/setup_langgraph_persistence.py`.
+- Added reusable `initialize_langgraph_persistence()` helper for `AsyncPostgresSaver.setup()` and `AsyncPostgresStore.setup()`.
+- Added `make setup-langgraph` shortcut for the dedicated persistence setup command.
 - Updated the Docker-init PostgreSQL schema to match the new idempotency, lease, retry, and dead-letter columns.
-- Added tests for event fingerprints, OpenProject normalization, ORM table registration, PostgreSQL conflict SQL, Redis queue behavior, retry classification, trigger duplicate handling, worker lease SQL, retry scheduling, dead-letter recording, recoverable job scanning, and persisted-event orchestrator routing.
+- Added tests for event fingerprints, OpenProject normalization, ORM table registration, PostgreSQL conflict SQL, Redis queue behavior, retry classification, trigger duplicate handling, worker lease SQL, retry scheduling, dead-letter recording, recoverable job scanning, persisted-event orchestrator routing, LangGraph persistence setup wiring, and stable checkpoint resume config.
+- Added an opt-in real-Postgres LangGraph restart test guarded by `LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL`.
 - Installed `redis>=5.2` into the repaired `.venv`.
 
 ## Runtime Compatibility Notes
@@ -36,6 +40,8 @@ Baseline date: 2026-07-21
 - Duplicate delivery safety is now enforced in both the core inbox adapter and the live trigger storage path.
 - Worker lease and retry behavior is now durable in `agent_jobs`.
 - The core orchestrator resumes planning with the existing `planning-session-{session_id}` LangGraph thread ID, so checkpoint resume can work once a durable checkpointer is configured.
+- The LangGraph setup script loads `.env` by default and redacts credentials in output.
+- The setup script normalizes `postgresql+asyncpg://` to `postgresql://`, matching the driver expected by LangGraph's Postgres checkpointer.
 - OpenProject event-to-project resolution currently depends on `ExternalArtifact` mappings for `project` or `work_package` artifacts.
 - Feedback classification is intentionally coarse in this slice; detailed requirement-change, approval, pause, resume, and cancellation semantics remain Phase 4 work.
 - `create_schema()` remains in planning-core startup, so Alembic is scaffolded but not yet enforced at service startup.
@@ -58,8 +64,12 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-36 passed, 4 warnings in 2.04s
+40 passed, 1 skipped, 4 warnings in 0.90s
 ```
+
+Skipped:
+
+- `tests/test_phase3_langgraph_persistence.py::test_langgraph_postgres_checkpoint_survives_recreated_checkpointer` requires `LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL`.
 
 Warnings:
 
@@ -88,7 +98,6 @@ Result:
 - Run migrations against a clean PostgreSQL database.
 - Move `agent_jobs` into the final general event-processing or workflow-execution table shape from the README.
 - Replace the trigger-local parser and retry policy copies with shared core imports after the Docker build/package boundary is changed.
-- Add LangGraph Postgres setup under `infra/scripts/setup_langgraph_persistence.py`.
-- Add process-restart resume tests with LangGraph Postgres.
+- Run the opt-in LangGraph restart test against a real PostgreSQL database by setting `LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL`.
 - Add duplicate webhook integration tests against a live or containerized Postgres instance.
 - Add visible OpenProject dead-letter comments once outbound OpenProject writes have idempotency markers.

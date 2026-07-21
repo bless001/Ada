@@ -15,7 +15,10 @@ dependencies = [
   "asyncpg>=0.29",
   "alembic>=1.13",
   "neo4j>=5.25",
-  "weaviate-client>=4.9"
+  "weaviate-client>=4.9",
+  "langgraph>=0.2.0",
+  "langgraph-checkpoint-postgres>=2.0.0",
+  "psycopg[binary,pool]>=3.2.0"
 ]
 
 [project.optional-dependencies]

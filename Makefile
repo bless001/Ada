@@ -2,6 +2,9 @@ setup:
 	python infra/scripts/generate_env.py
 	mkdir -p models workspace
 
+setup-langgraph:
+	python infra/scripts/setup_langgraph_persistence.py
+
 up:
 	docker compose up -d --build
 

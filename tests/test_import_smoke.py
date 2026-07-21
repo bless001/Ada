@@ -12,6 +12,7 @@ CORE_MODULES = [
     "planning_agent_core.application.project_orchestrator",
     "planning_agent_core.skills",
     "planning_agent_core.workflow.graph",
+    "planning_agent_core.workflow.persistence_setup",
     "planning_agent_core.workflow.runner",
     "planning_agent_core.workflow.state",
 ]
