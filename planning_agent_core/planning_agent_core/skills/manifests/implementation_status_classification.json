@@ -1,0 +1,10 @@
+{
+  "name": "implementation_status_classification",
+  "version": "0.1.0",
+  "description": "Classifies requirements against repository evidence as complete, partial, missing, conflicting, or unverifiable.",
+  "input_schema": null,
+  "output_schema": null,
+  "side_effects": false,
+  "required_tools": ["repository", "graph_store", "vector_store"],
+  "status": "planned"
+}

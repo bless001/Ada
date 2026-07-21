@@ -1,0 +1,10 @@
+{
+  "name": "openproject_projection",
+  "version": "0.1.0",
+  "description": "Projects epics, stories, tasks, dependencies, descriptions, and status into OpenProject.",
+  "input_schema": null,
+  "output_schema": null,
+  "side_effects": false,
+  "required_tools": ["openproject"],
+  "status": "planned"
+}

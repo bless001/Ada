@@ -1,0 +1,10 @@
+{
+  "name": "requirement_extraction",
+  "version": "0.1.0",
+  "description": "Extracts and normalizes requirements with source evidence.",
+  "input_schema": null,
+  "output_schema": null,
+  "side_effects": false,
+  "required_tools": ["llm"],
+  "status": "planned"
+}

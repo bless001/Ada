@@ -1,0 +1,10 @@
+{
+  "name": "context_capsule",
+  "version": "0.1.0",
+  "description": "Assembles bounded task-specific context capsules from plan and evidence state.",
+  "input_schema": null,
+  "output_schema": null,
+  "side_effects": false,
+  "required_tools": ["postgres"],
+  "status": "planned"
+}

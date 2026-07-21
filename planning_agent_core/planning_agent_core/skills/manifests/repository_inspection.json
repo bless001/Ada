@@ -1,0 +1,10 @@
+{
+  "name": "repository_inspection",
+  "version": "0.1.0",
+  "description": "Inspects mounted repository structure, symbols, tests, and implementation evidence.",
+  "input_schema": null,
+  "output_schema": null,
+  "side_effects": false,
+  "required_tools": ["repository"],
+  "status": "planned"
+}

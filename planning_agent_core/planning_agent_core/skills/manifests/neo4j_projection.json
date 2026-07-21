@@ -1,0 +1,10 @@
+{
+  "name": "neo4j_projection",
+  "version": "0.1.0",
+  "description": "Projects planning and evidence relationships into Neo4j.",
+  "input_schema": null,
+  "output_schema": null,
+  "side_effects": false,
+  "required_tools": ["graph_store"],
+  "status": "planned"
+}

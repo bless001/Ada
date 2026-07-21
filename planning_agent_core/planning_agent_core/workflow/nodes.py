@@ -10,6 +10,7 @@ from planning_agent_core.services.context_capsule_service import ContextCapsuleS
 from planning_agent_core.skills import build_skill_registry
 from planning_agent_core.skills.base import SkillContext
 from planning_agent_core.skills.router import SkillRouter
+from planning_agent_core.workflow.skill_node import SkillNodeAdapter
 from planning_agent_core.workflow.state import PlanningGraphState
 
 
@@ -19,6 +20,7 @@ def make_nodes(db: AsyncSession):
 
     registry = build_skill_registry()
     skill_router = SkillRouter(registry)
+    skill_node = SkillNodeAdapter(registry)
 
     async def load_session(
         state: PlanningGraphState,
@@ -74,14 +76,13 @@ def make_nodes(db: AsyncSession):
         *,
         store: BaseStore,
     ) -> PlanningGraphState:
-        skill = registry.get(state["selected_skill"])
-
         skill_context = SkillContext(
             project_key=state["project_key"],
             session_id=str(state["session_id"]),
         )
 
-        result = await skill.run(
+        result = await skill_node.run(
+            skill_name=state["selected_skill"],
             intent=state["current_intent"],
             context=skill_context,
             input_data={

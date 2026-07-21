@@ -1,0 +1,10 @@
+{
+  "name": "weaviate_projection",
+  "version": "0.1.0",
+  "description": "Projects semantic planning memory and context into Weaviate.",
+  "input_schema": null,
+  "output_schema": null,
+  "side_effects": false,
+  "required_tools": ["vector_store"],
+  "status": "planned"
+}
