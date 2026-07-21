@@ -8,6 +8,8 @@ CORE_MODULES = [
     "planning_agent_core.main",
     "planning_agent_core.models",
     "planning_agent_core.schemas",
+    "planning_agent_core.api.events",
+    "planning_agent_core.application.project_orchestrator",
     "planning_agent_core.skills",
     "planning_agent_core.workflow.graph",
     "planning_agent_core.workflow.runner",

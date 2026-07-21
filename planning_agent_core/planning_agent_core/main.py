@@ -6,6 +6,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from planning_agent_core import models as _models  # noqa: F401
 from planning_agent_core.api.context import router as context_router
 from planning_agent_core.api.documents import router as documents_router
+from planning_agent_core.api.events import router as events_router
 from planning_agent_core.api.planning import router as planning_router
 from planning_agent_core.api.projects import router as projects_router
 from planning_agent_core.api.provisioning import router as provisioning_router
@@ -40,6 +41,7 @@ app.include_router(documents_router)
 app.include_router(planning_router)
 app.include_router(provisioning_router)
 app.include_router(context_router)
+app.include_router(events_router)
 
 
 @app.get("/health")
