@@ -10,35 +10,43 @@ Baseline date: 2026-07-21
 - Added SQLAlchemy ORM models for the existing webhook tables: `pm_webhook_events`, `agent_jobs`, and `pm_context_snapshots`.
 - Added `idempotency_key` and `retry_at` to `pm_webhook_events`.
 - Added job lease, retry, attempt-count, and terminal error fields to `agent_jobs`: `attempt_count`, `retry_at`, `lease_owner`, `lease_expires_at`, and `last_error`.
+- Added README-aligned `agent_executions` workflow execution tracking table.
 - Added Alembic migration `0002_webhook_event_idempotency`.
 - Added Alembic migration `0003_agent_job_leases`.
+- Added Alembic migration `0004_agent_executions`.
 - Added async `SqlAlchemyEventInbox` adapter with PostgreSQL `ON CONFLICT DO NOTHING` duplicate handling.
+- Added `AgentExecutionRecorderPort` and `SqlAlchemyAgentExecutionRecorder`.
 - Changed the event inbox port to return `EventInboxPersistResult` with `created` status so callers can avoid enqueueing duplicate deliveries.
 - Added event queue port and Redis queue adapter.
 - Added deterministic retry classification helper in the core package.
+- Added shared bounded retry-delay helper in the core package.
 - Migrated `infra/agent_trigger` webhook parsing to compute the same idempotency key as the core event classifier.
 - Migrated `infra/agent_trigger` storage to persist duplicate-safe webhook events with `ON CONFLICT (idempotency_key) DO NOTHING`.
 - Updated `infra/agent_trigger` webhook response behavior so duplicate deliveries return `status: duplicate` and do not enqueue another Redis item.
+- Replaced trigger-local parser and retry-policy implementations with thin wrappers around shared `planning_agent_core` code.
+- Changed `agent-webhook` and `agent-worker` Docker build context so the trigger image copies the shared core package.
 - Added trigger worker lease acquisition before event processing.
 - Added bounded retry scheduling with durable `retry_at` and recoverable job re-enqueue scanning.
 - Added terminal `dead_letter` recording for non-retryable failures or exhausted attempts.
 - Added `ProjectEventOrchestrator` to load persisted inbox events, resolve local project mappings, and route resumable OpenProject feedback into the planning workflow runner.
+- Updated `ProjectEventOrchestrator` to record planning workflow executions and finish them as `succeeded`, `waiting`, or `failed`.
 - Added `POST /v1/events/{event_id}/orchestrate` as a manual core entry point for persisted-event orchestration.
 - Added explicit LangGraph persistence setup command at `infra/scripts/setup_langgraph_persistence.py`.
 - Added reusable `initialize_langgraph_persistence()` helper for `AsyncPostgresSaver.setup()` and `AsyncPostgresStore.setup()`.
 - Added `make setup-langgraph` shortcut for the dedicated persistence setup command.
 - Updated the Docker-init PostgreSQL schema to match the new idempotency, lease, retry, and dead-letter columns.
-- Added tests for event fingerprints, OpenProject normalization, ORM table registration, PostgreSQL conflict SQL, Redis queue behavior, retry classification, trigger duplicate handling, worker lease SQL, retry scheduling, dead-letter recording, recoverable job scanning, persisted-event orchestrator routing, LangGraph persistence setup wiring, and stable checkpoint resume config.
+- Added tests for event fingerprints, OpenProject normalization, ORM table registration, PostgreSQL conflict SQL, Redis queue behavior, retry classification, trigger/core shared parser and retry wrappers, trigger duplicate handling, worker lease SQL, retry scheduling, dead-letter recording, recoverable job scanning, persisted-event orchestrator routing, execution recording, LangGraph persistence setup wiring, and stable checkpoint resume config.
 - Added an opt-in real-Postgres LangGraph restart test guarded by `LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL`.
+- Added opt-in real-Postgres migration and duplicate webhook tests guarded by `PHASE3_POSTGRES_DATABASE_URL`.
 - Installed `redis>=5.2` into the repaired `.venv`.
 
 ## Runtime Compatibility Notes
 
-- `infra/agent_trigger` remains a standalone service because its Docker build context currently copies only `requirements.txt` and `app/`.
-- The trigger parser intentionally mirrors the core classifier instead of importing `planning_agent_core`; this avoids breaking the current trigger container.
+- `infra/agent_trigger` remains a standalone service, but its Docker image now copies the shared core package for parser and retry-policy imports.
 - The new async inbox adapter is ready for core worker integration, but the live trigger service still uses synchronous `psycopg` storage.
 - Duplicate delivery safety is now enforced in both the core inbox adapter and the live trigger storage path.
 - Worker lease and retry behavior is now durable in `agent_jobs`.
+- `agent_jobs` remains as the trigger service queue compatibility table; workflow execution history is now captured separately in `agent_executions`.
 - The core orchestrator resumes planning with the existing `planning-session-{session_id}` LangGraph thread ID, so checkpoint resume can work once a durable checkpointer is configured.
 - The LangGraph setup script loads `.env` by default and redacts credentials in output.
 - The setup script normalizes `postgresql+asyncpg://` to `postgresql://`, matching the driver expected by LangGraph's Postgres checkpointer.
@@ -64,12 +72,14 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-40 passed, 1 skipped, 4 warnings in 0.90s
+49 passed, 3 skipped, 4 warnings in 0.95s
 ```
 
 Skipped:
 
 - `tests/test_phase3_langgraph_persistence.py::test_langgraph_postgres_checkpoint_survives_recreated_checkpointer` requires `LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL`.
+- `tests/test_phase3_postgres_integration.py::test_phase3_alembic_upgrade_creates_expected_tables` requires `PHASE3_POSTGRES_DATABASE_URL`.
+- `tests/test_phase3_postgres_integration.py::test_phase3_event_inbox_duplicate_delivery_creates_one_job` requires `PHASE3_POSTGRES_DATABASE_URL`.
 
 Warnings:
 
@@ -88,16 +98,31 @@ cd planning_agent_core
 Result:
 
 ```text
-0002_webhook_event_idempotency -> 0003_agent_job_leases (head), add agent job leases and retry scheduling
+0003_agent_job_leases -> 0004_agent_executions (head), add agent execution tracking
+0002_webhook_event_idempotency -> 0003_agent_job_leases, add agent job leases and retry scheduling
 0001_current_baseline -> 0002_webhook_event_idempotency, add webhook event idempotency key
 <base> -> 0001_current_baseline, current baseline schema
 ```
 
 ## Remaining Phase 3 Work
 
-- Run migrations against a clean PostgreSQL database.
-- Move `agent_jobs` into the final general event-processing or workflow-execution table shape from the README.
-- Replace the trigger-local parser and retry policy copies with shared core imports after the Docker build/package boundary is changed.
+- Run migrations and duplicate webhook integration tests against a clean PostgreSQL database when a live database is available.
+- Retire or narrow `agent_jobs` after the standalone trigger worker is migrated to the shared core execution path.
 - Run the opt-in LangGraph restart test against a real PostgreSQL database by setting `LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL`.
-- Add duplicate webhook integration tests against a live or containerized Postgres instance.
 - Add visible OpenProject dead-letter comments once outbound OpenProject writes have idempotency markers.
+
+## Live PostgreSQL Attempt
+
+Command attempted:
+
+```powershell
+docker run --rm -d --name ada-phase3-pg-$PID -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=ada_phase3 -p 127.0.0.1::5432 postgres:17-alpine
+```
+
+Result:
+
+```text
+failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine
+```
+
+Docker CLI is installed, but Docker Desktop/Linux engine was not running in this environment.

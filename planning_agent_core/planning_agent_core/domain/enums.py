@@ -84,3 +84,12 @@ class RetryCategory(StrEnum):
     AUTHENTICATION_FAILURE = "AUTHENTICATION_FAILURE"
     PERMANENT_EXTERNAL_ERROR = "PERMANENT_EXTERNAL_ERROR"
     UNKNOWN = "UNKNOWN"
+
+
+class AgentExecutionStatus(StrEnum):
+    CREATED = "created"
+    RUNNING = "running"
+    WAITING = "waiting"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"

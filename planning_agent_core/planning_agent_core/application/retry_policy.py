@@ -54,3 +54,13 @@ def classify_exception(exc: BaseException) -> RetryDecision:
         )
 
     return RetryDecision(RetryCategory.UNKNOWN, False, "Unknown failure")
+
+
+def calculate_retry_delay_seconds(
+    attempt_count: int,
+    *,
+    base_seconds: int,
+    max_seconds: int,
+) -> int:
+    exponent = max(attempt_count - 1, 0)
+    return min(max_seconds, base_seconds * (2**exponent))

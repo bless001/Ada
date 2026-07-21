@@ -5,9 +5,10 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-COPY requirements.txt .
+COPY infra/agent_trigger/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY infra/agent_trigger/app ./app
+COPY planning_agent_core/planning_agent_core ./planning_agent_core
 
 EXPOSE 8090

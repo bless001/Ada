@@ -163,7 +163,8 @@ services:
   # -------------------------------------------------------------------------
   agent-webhook:
     build:
-      context: ./infra/agent_trigger
+      context: .
+      dockerfile: infra/agent_trigger/Dockerfile
     container_name: ca-agent-webhook
     restart: unless-stopped
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]
@@ -190,7 +191,8 @@ services:
   # -------------------------------------------------------------------------
   agent-worker:
     build:
-      context: ./infra/agent_trigger
+      context: .
+      dockerfile: infra/agent_trigger/Dockerfile
     container_name: ca-agent-worker
     restart: unless-stopped
     command: ["python", "-m", "app.worker"]

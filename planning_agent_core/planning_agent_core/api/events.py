@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from planning_agent_core.api.deps import get_db
 from planning_agent_core.application.project_orchestrator import ProjectEventOrchestrator
+from planning_agent_core.persistence.executions import SqlAlchemyAgentExecutionRecorder
 from planning_agent_core.persistence.event_inbox import SqlAlchemyEventInbox
 from planning_agent_core.workflow.runner import PlanningWorkflowRunner
 
@@ -26,6 +27,7 @@ async def orchestrate_event(
         db=db,
         event_inbox=SqlAlchemyEventInbox(db),
         planning_runner=runner,
+        execution_recorder=SqlAlchemyAgentExecutionRecorder(db),
     )
 
     try:

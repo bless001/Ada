@@ -8,10 +8,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from planning_agent_core.domain.enums import PlanningSessionStatus
+from planning_agent_core.domain.enums import AgentExecutionStatus, PlanningSessionStatus
 from planning_agent_core.domain.events import EventEnvelope
 from planning_agent_core.models import ExternalArtifact, PlanningSession
 from planning_agent_core.ports.event_inbox import EventInboxPort
+from planning_agent_core.ports.executions import AgentExecutionRecorderPort
 
 
 class OrchestrationAction(StrEnum):
@@ -30,6 +31,7 @@ class OrchestrationResult:
     project_id: UUID | None = None
     planning_session_id: UUID | None = None
     thread_id: str | None = None
+    execution_id: UUID | None = None
     workflow_result: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -42,6 +44,7 @@ class OrchestrationResult:
                 str(self.planning_session_id) if self.planning_session_id else None
             ),
             "thread_id": self.thread_id,
+            "execution_id": str(self.execution_id) if self.execution_id else None,
             "workflow_result": self.workflow_result,
         }
 
@@ -58,10 +61,12 @@ class ProjectEventOrchestrator:
         db: AsyncSession,
         event_inbox: EventInboxPort,
         planning_runner: PlanningRunnerPort,
+        execution_recorder: AgentExecutionRecorderPort | None = None,
     ) -> None:
         self.db = db
         self.event_inbox = event_inbox
         self.planning_runner = planning_runner
+        self.execution_recorder = execution_recorder
 
     async def handle_persisted_event(self, event_id: str) -> OrchestrationResult:
         envelope = await self.event_inbox.get(event_id)
@@ -116,8 +121,41 @@ class ProjectEventOrchestrator:
                 project_id=project_id,
             )
 
-        workflow_result = await self.planning_runner.run(session.id)
         thread_id = f"planning-session-{session.id}"
+        execution = None
+        if self.execution_recorder is not None:
+            execution = await self.execution_recorder.start(
+                project_id=project_id,
+                agent_name="planning",
+                thread_id=thread_id,
+                trigger_event_id=event_id,
+                config_snapshot={
+                    "event_source": envelope.source,
+                    "event_type": envelope.event_type,
+                    "checkpoint_ns": "planning",
+                },
+            )
+
+        try:
+            workflow_result = await self.planning_runner.run(session.id)
+        except Exception as exc:
+            if execution is not None:
+                await self.execution_recorder.finish(
+                    execution.execution_id,
+                    status=AgentExecutionStatus.FAILED,
+                    error_summary={
+                        "type": exc.__class__.__name__,
+                        "message": str(exc)[:2000],
+                    },
+                )
+            raise
+
+        if execution is not None:
+            await self.execution_recorder.finish(
+                execution.execution_id,
+                status=classify_workflow_completion(workflow_result),
+            )
+
         return OrchestrationResult(
             event_id=event_id,
             action=OrchestrationAction.RESUME_PLANNING,
@@ -125,6 +163,7 @@ class ProjectEventOrchestrator:
             project_id=project_id,
             planning_session_id=session.id,
             thread_id=thread_id,
+            execution_id=execution.execution_id if execution else None,
             workflow_result=workflow_result,
         )
 
@@ -191,3 +230,13 @@ def should_resume_planning(envelope: EventEnvelope) -> bool:
 
     markers = ("comment", "approval", "approve", "resume", "rework")
     return any(marker in event_type or marker in payload_action for marker in markers)
+
+
+def classify_workflow_completion(workflow_result: dict[str, Any]) -> AgentExecutionStatus:
+    if workflow_result.get("clarification_questions"):
+        return AgentExecutionStatus.WAITING
+
+    if workflow_result.get("ambiguity_status") == "needs_clarification":
+        return AgentExecutionStatus.WAITING
+
+    return AgentExecutionStatus.SUCCEEDED

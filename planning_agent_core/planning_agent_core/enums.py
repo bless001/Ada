@@ -1,4 +1,5 @@
 from planning_agent_core.domain.enums import (
+    AgentExecutionStatus,
     ImplementationStatus,
     InputMode,
     PlanNodeKind,
@@ -12,6 +13,7 @@ from planning_agent_core.domain.enums import (
 )
 
 __all__ = [
+    "AgentExecutionStatus",
     "ImplementationStatus",
     "InputMode",
     "PlanNodeKind",

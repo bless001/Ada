@@ -8,11 +8,14 @@ from uuid import uuid4
 import pytest
 
 from planning_agent_core.application.project_orchestrator import (
+    classify_workflow_completion,
     OrchestrationAction,
     ProjectEventOrchestrator,
     should_resume_planning,
 )
+from planning_agent_core.domain.enums import AgentExecutionStatus
 from planning_agent_core.domain.events import EventEnvelope
+from planning_agent_core.ports.executions import AgentExecutionStart
 
 
 @dataclass
@@ -57,6 +60,23 @@ class FakeRunner:
         return self.result
 
 
+class FakeExecutionRecorder:
+    def __init__(self):
+        self.execution_id = uuid4()
+        self.start_calls: list[dict[str, Any]] = []
+        self.finish_calls: list[dict[str, Any]] = []
+
+    async def start(self, **kwargs):
+        self.start_calls.append(kwargs)
+        return AgentExecutionStart(
+            execution_id=self.execution_id,
+            attempt_number=1,
+        )
+
+    async def finish(self, execution_id, **kwargs):
+        self.finish_calls.append({"execution_id": execution_id, **kwargs})
+
+
 @pytest.mark.asyncio
 async def test_project_orchestrator_resumes_waiting_planning_thread_from_event():
     project_id = uuid4()
@@ -91,6 +111,56 @@ async def test_project_orchestrator_resumes_waiting_planning_thread_from_event()
         ("get", "event-1"),
         ("processing", "event-1"),
         ("processed", "event-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_project_orchestrator_records_planning_execution_for_resume():
+    project_id = uuid4()
+    session_id = uuid4()
+    event_id = str(uuid4())
+    event = EventEnvelope(
+        source="openproject",
+        event_type="work_package.comment_created",
+        external_project_id="12",
+        external_comment_id="99",
+        payload={"action": "work_package.comment_created"},
+    )
+    inbox = FakeInbox(event=event, marks=[])
+    db = FakeDb(
+        SimpleNamespace(project_id=project_id),
+        SimpleNamespace(id=session_id),
+    )
+    runner = FakeRunner(result={"ambiguity_status": "clear"})
+    recorder = FakeExecutionRecorder()
+    orchestrator = ProjectEventOrchestrator(
+        db=db,
+        event_inbox=inbox,
+        planning_runner=runner,
+        execution_recorder=recorder,
+    )
+
+    result = await orchestrator.handle_persisted_event(event_id)
+
+    assert result.execution_id == recorder.execution_id
+    assert recorder.start_calls == [
+        {
+            "project_id": project_id,
+            "agent_name": "planning",
+            "thread_id": f"planning-session-{session_id}",
+            "trigger_event_id": event_id,
+            "config_snapshot": {
+                "event_source": "openproject",
+                "event_type": "work_package.comment_created",
+                "checkpoint_ns": "planning",
+            },
+        }
+    ]
+    assert recorder.finish_calls == [
+        {
+            "execution_id": recorder.execution_id,
+            "status": AgentExecutionStatus.SUCCEEDED,
+        }
     ]
 
 
@@ -174,6 +244,47 @@ async def test_project_orchestrator_marks_failed_when_resume_raises():
     assert ("processed", "event-1") not in inbox.marks
 
 
+@pytest.mark.asyncio
+async def test_project_orchestrator_marks_execution_failed_when_resume_raises():
+    project_id = uuid4()
+    session_id = uuid4()
+    event_id = str(uuid4())
+    event = EventEnvelope(
+        source="openproject",
+        event_type="work_package.comment_created",
+        external_project_id="12",
+        external_comment_id="99",
+        payload={"action": "work_package.comment_created"},
+    )
+    inbox = FakeInbox(event=event, marks=[])
+    db = FakeDb(
+        SimpleNamespace(project_id=project_id),
+        SimpleNamespace(id=session_id),
+    )
+    runner = FakeRunner(error=TimeoutError("timed out"))
+    recorder = FakeExecutionRecorder()
+    orchestrator = ProjectEventOrchestrator(
+        db=db,
+        event_inbox=inbox,
+        planning_runner=runner,
+        execution_recorder=recorder,
+    )
+
+    with pytest.raises(TimeoutError):
+        await orchestrator.handle_persisted_event(event_id)
+
+    assert recorder.finish_calls == [
+        {
+            "execution_id": recorder.execution_id,
+            "status": AgentExecutionStatus.FAILED,
+            "error_summary": {
+                "type": "TimeoutError",
+                "message": "timed out",
+            },
+        }
+    ]
+
+
 def test_should_resume_planning_uses_comment_and_feedback_markers():
     assert should_resume_planning(
         EventEnvelope(
@@ -196,4 +307,16 @@ def test_should_resume_planning_uses_comment_and_feedback_markers():
             event_type="work_package.updated",
             payload={"action": "work_package.updated"},
         )
+    )
+
+
+def test_classify_workflow_completion_marks_waiting_for_clarification():
+    assert classify_workflow_completion({"ambiguity_status": "clear"}) == (
+        AgentExecutionStatus.SUCCEEDED
+    )
+    assert classify_workflow_completion({"ambiguity_status": "needs_clarification"}) == (
+        AgentExecutionStatus.WAITING
+    )
+    assert classify_workflow_completion({"clarification_questions": [{"question": "Why?"}]}) == (
+        AgentExecutionStatus.WAITING
     )

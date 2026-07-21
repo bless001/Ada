@@ -5,11 +5,14 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert
 
 from planning_agent_core.application.event_classification import normalize_openproject_event
-from planning_agent_core.application.retry_policy import classify_exception
+from planning_agent_core.application.retry_policy import (
+    calculate_retry_delay_seconds,
+    classify_exception,
+)
 from planning_agent_core.adapters.redis_queue import RedisEventQueue
-from planning_agent_core.domain.enums import RetryCategory
+from planning_agent_core.domain.enums import AgentExecutionStatus, RetryCategory
 from planning_agent_core.domain.events import EventEnvelope, calculate_event_idempotency_key
-from planning_agent_core.models import AgentJob, OpenProjectContextSnapshot, WebhookEvent
+from planning_agent_core.models import AgentExecution, AgentJob, OpenProjectContextSnapshot, WebhookEvent
 
 
 def test_event_idempotency_key_is_stable_for_payload_key_order_and_ignores_headers():
@@ -93,6 +96,29 @@ def test_webhook_orm_models_cover_existing_tables_and_idempotency_column():
     assert "last_error" in AgentJob.__table__.columns
 
 
+def test_agent_execution_model_matches_readme_execution_tracking_shape():
+    assert AgentExecution.__tablename__ == "agent_executions"
+    assert AgentExecutionStatus.RUNNING.value == "running"
+
+    columns = AgentExecution.__table__.columns
+    assert "project_id" in columns
+    assert "agent_name" in columns
+    assert "thread_id" in columns
+    assert "trigger_event_id" in columns
+    assert "parent_execution_id" in columns
+    assert "attempt_number" in columns
+    assert "status" in columns
+    assert "config_snapshot" in columns
+    assert "started_at" in columns
+    assert "ended_at" in columns
+    assert "error_summary" in columns
+
+    index_names = {index.name for index in AgentExecution.__table__.indexes}
+    assert "idx_agent_executions_thread_started" in index_names
+    assert "idx_agent_executions_project_status" in index_names
+    assert "idx_agent_executions_trigger_event" in index_names
+
+
 def test_webhook_event_insert_supports_postgres_conflict_handling():
     statement = (
         insert(WebhookEvent)
@@ -151,3 +177,21 @@ def test_retry_policy_classifies_retryable_and_terminal_errors():
         RetryCategory.AUTHENTICATION_FAILURE
     )
     assert not classify_exception(ValueError("bad payload")).retryable
+
+
+def test_retry_delay_uses_bounded_exponential_backoff():
+    assert calculate_retry_delay_seconds(
+        1,
+        base_seconds=30,
+        max_seconds=600,
+    ) == 30
+    assert calculate_retry_delay_seconds(
+        3,
+        base_seconds=30,
+        max_seconds=600,
+    ) == 120
+    assert calculate_retry_delay_seconds(
+        99,
+        base_seconds=30,
+        max_seconds=600,
+    ) == 600

@@ -1,154 +1,43 @@
-import hashlib
-import json
-import re
+from __future__ import annotations
+
 from typing import Any
 
-WORK_PACKAGE_HREF_RE = re.compile(r"/api/v3/work_packages/(\d+)")
-PROJECT_HREF_RE = re.compile(r"/api/v3/projects/(\d+)")
+from planning_agent_core.application.event_classification import (
+    find_comment_id,
+    find_first_key,
+    find_project_id,
+    find_work_package_id,
+    infer_event_type,
+    normalize_openproject_event as normalize_openproject_event_envelope,
+)
+from planning_agent_core.domain.events import (
+    calculate_event_idempotency_key,
+    canonical_json,
+)
 
 
-def _walk(value: Any):
-    if isinstance(value, dict):
-        yield value
-        for child in value.values():
-            yield from _walk(child)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _walk(item)
-
-
-def find_first_key(payload: dict, names: set[str]) -> str | None:
-    for obj in _walk(payload):
-        for key, value in obj.items():
-            if key in names and value is not None:
-                return str(value)
-    return None
-
-
-def find_work_package_id(payload: dict) -> str | None:
-    direct = find_first_key(payload, {"work_package_id", "workPackageId", "workPackageID"})
-    if direct and direct.isdigit():
-        return direct
-
-    for obj in _walk(payload):
-        if "workPackage" in obj and isinstance(obj["workPackage"], dict):
-            wp_id = obj["workPackage"].get("id")
-            if wp_id:
-                return str(wp_id)
-
-        if "_links" in obj and isinstance(obj["_links"], dict):
-            for link in obj["_links"].values():
-                if isinstance(link, dict):
-                    href = link.get("href")
-                    if isinstance(href, str):
-                        match = WORK_PACKAGE_HREF_RE.search(href)
-                        if match:
-                            return match.group(1)
-
-        for value in obj.values():
-            if isinstance(value, str):
-                match = WORK_PACKAGE_HREF_RE.search(value)
-                if match:
-                    return match.group(1)
-
-    return None
-
-
-def find_project_id(payload: dict) -> str | None:
-    direct = find_first_key(payload, {"project_id", "projectId", "projectID"})
-    if direct:
-        return direct
-
-    for obj in _walk(payload):
-        if "project" in obj and isinstance(obj["project"], dict):
-            project_id = obj["project"].get("id")
-            if project_id:
-                return str(project_id)
-
-        for value in obj.values():
-            if isinstance(value, str):
-                match = PROJECT_HREF_RE.search(value)
-                if match:
-                    return match.group(1)
-
-    return None
-
-
-def find_comment_id(payload: dict) -> str | None:
-    direct = find_first_key(payload, {"comment_id", "commentId", "activity_id", "activityId"})
-    if direct:
-        return direct
-
-    for obj in _walk(payload):
-        if obj.get("_type") == "Activity::Comment" and obj.get("id"):
-            return str(obj["id"])
-
-    return None
-
-
-def infer_event_type(payload: dict, headers: dict[str, str]) -> str:
-    for header_name in ("x-op-event", "x-openproject-event", "x-event-name", "x-webhook-event"):
-        if headers.get(header_name):
-            return headers[header_name]
-
-    for key in ("event_name", "event", "action", "type"):
-        value = payload.get(key)
-        if value:
-            return str(value)
-
-    return "unknown"
-
-
-def canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        default=str,
-    )
-
-
-def calculate_event_idempotency_key(
-    *,
-    source_tool: str,
-    event_type: str,
-    external_project_id: str | None,
-    external_work_package_id: str | None,
-    external_comment_id: str | None,
+def normalize_openproject_event(
     payload: dict[str, Any],
-) -> str:
-    fingerprint_input = {
-        "source": source_tool,
-        "event_type": event_type,
-        "external_project_id": external_project_id,
-        "external_work_package_id": external_work_package_id,
-        "external_comment_id": external_comment_id,
-        "payload": payload,
-    }
-    digest = hashlib.sha256(canonical_json(fingerprint_input).encode("utf-8")).hexdigest()
-    return f"{source_tool}:{digest}"
-
-
-def normalize_openproject_event(payload: dict, headers: dict[str, str]) -> dict:
-    source_tool = "openproject"
-    event_type = infer_event_type(payload, headers)
-    external_project_id = find_project_id(payload)
-    external_work_package_id = find_work_package_id(payload)
-    external_comment_id = find_comment_id(payload)
-
+    headers: dict[str, str],
+) -> dict[str, str | None]:
+    envelope = normalize_openproject_event_envelope(payload, headers)
     return {
-        "source_tool": source_tool,
-        "event_type": event_type,
-        "external_project_id": external_project_id,
-        "external_work_package_id": external_work_package_id,
-        "external_comment_id": external_comment_id,
-        "idempotency_key": calculate_event_idempotency_key(
-            source_tool=source_tool,
-            event_type=event_type,
-            external_project_id=external_project_id,
-            external_work_package_id=external_work_package_id,
-            external_comment_id=external_comment_id,
-            payload=payload,
-        ),
+        "source_tool": envelope.source,
+        "event_type": envelope.event_type,
+        "external_project_id": envelope.external_project_id,
+        "external_work_package_id": envelope.external_work_package_id,
+        "external_comment_id": envelope.external_comment_id,
+        "idempotency_key": envelope.idempotency_key,
     }
+
+
+__all__ = [
+    "calculate_event_idempotency_key",
+    "canonical_json",
+    "find_comment_id",
+    "find_first_key",
+    "find_project_id",
+    "find_work_package_id",
+    "infer_event_type",
+    "normalize_openproject_event",
+]

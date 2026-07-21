@@ -15,6 +15,8 @@ CORE_MODULES = [
     "planning_agent_core.workflow.persistence_setup",
     "planning_agent_core.workflow.runner",
     "planning_agent_core.workflow.state",
+    "planning_agent_core.ports.executions",
+    "planning_agent_core.persistence.executions",
 ]
 
 

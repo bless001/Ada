@@ -251,6 +251,44 @@ class AgentJob(Base):
     last_error: Mapped[dict | None] = mapped_column(JSONB)
 
 
+class AgentExecution(Base):
+    __tablename__ = "agent_executions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('created', 'running', 'waiting', 'succeeded', 'failed', 'cancelled')",
+            name="ck_agent_executions_status",
+        ),
+        Index("idx_agent_executions_thread_started", "thread_id", "started_at"),
+        Index("idx_agent_executions_project_status", "project_id", "status"),
+        Index("idx_agent_executions_trigger_event", "trigger_event_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False)
+    thread_id: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_event_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("pm_webhook_events.id", ondelete="SET NULL"),
+    )
+    parent_execution_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("agent_executions.id", ondelete="SET NULL"),
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="created")
+    config_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_summary: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
 class OpenProjectContextSnapshot(Base):
     __tablename__ = "pm_context_snapshots"
     __table_args__ = (

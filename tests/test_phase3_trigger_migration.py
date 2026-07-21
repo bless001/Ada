@@ -8,6 +8,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from planning_agent_core.application.event_classification import normalize_openproject_event
+from planning_agent_core.domain.enums import RetryCategory
 
 
 def _import_trigger_module(monkeypatch, module_name: str):
@@ -36,6 +37,32 @@ def test_trigger_event_parser_idempotency_matches_core(monkeypatch):
     assert trigger_event["external_project_id"] == core_event.external_project_id
     assert trigger_event["external_work_package_id"] == core_event.external_work_package_id
     assert trigger_event["idempotency_key"] == core_event.idempotency_key
+    assert trigger_parser.find_work_package_id.__module__.startswith("planning_agent_core.")
+
+
+def test_trigger_retry_policy_reexports_core_policy(monkeypatch):
+    trigger_retry_policy = _import_trigger_module(monkeypatch, "app.retry_policy")
+
+    decision = trigger_retry_policy.classify_exception(TimeoutError("timed out"))
+
+    assert decision.category == RetryCategory.TRANSIENT_NETWORK
+    assert trigger_retry_policy.calculate_retry_delay_seconds(
+        2,
+        base_seconds=3,
+        max_seconds=60,
+    ) == 6
+    assert trigger_retry_policy.classify_exception.__module__.startswith("planning_agent_core.")
+
+
+def test_trigger_docker_build_copies_core_package_for_shared_imports():
+    repo_root = Path(__file__).resolve().parents[1]
+    dockerfile = (repo_root / "infra" / "agent_trigger" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    compose = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "COPY planning_agent_core/planning_agent_core ./planning_agent_core" in dockerfile
+    assert "dockerfile: infra/agent_trigger/Dockerfile" in compose
 
 
 class FakeCursor:
@@ -290,7 +317,7 @@ def test_trigger_worker_schedules_retry_for_transient_failures(monkeypatch):
         "lease_owner": "worker-a",
         "lease_seconds": 120,
     }
-    assert store.retry_calls[0]["retry_category"] == "transient_network"
+    assert store.retry_calls[0]["retry_category"] == RetryCategory.TRANSIENT_NETWORK
     assert store.retry_calls[0]["retry_at"] > datetime.now(timezone.utc)
     assert store.dead_letter_calls == []
 
@@ -309,5 +336,5 @@ def test_trigger_worker_dead_letters_terminal_failures(monkeypatch):
 
     assert result.requeue_after_seconds is None
     assert store.retry_calls == []
-    assert store.dead_letter_calls[0]["retry_category"] == "unknown"
+    assert store.dead_letter_calls[0]["retry_category"] == RetryCategory.UNKNOWN
     assert store.dead_letter_calls[0]["retryable"] is False
