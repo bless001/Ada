@@ -31,11 +31,14 @@ Baseline date: 2026-07-21
 - Added `ProjectEventOrchestrator` to load persisted inbox events, resolve local project mappings, and route resumable OpenProject feedback into the planning workflow runner.
 - Updated `ProjectEventOrchestrator` to record planning workflow executions and finish them as `succeeded`, `waiting`, or `failed`.
 - Added `POST /v1/events/{event_id}/orchestrate` as a manual core entry point for persisted-event orchestration.
+- Added a trigger-side core orchestration client for `POST /v1/events/{event_id}/orchestrate`.
+- Narrowed `infra/agent_trigger` worker behavior to queue lease, retry, dead-letter, and core orchestration delegation.
+- Updated `agent-worker` Compose configuration to depend on `planning-agent-core` and use `PLANNING_AGENT_CORE_URL`.
 - Added explicit LangGraph persistence setup command at `infra/scripts/setup_langgraph_persistence.py`.
 - Added reusable `initialize_langgraph_persistence()` helper for `AsyncPostgresSaver.setup()` and `AsyncPostgresStore.setup()`.
 - Added `make setup-langgraph` shortcut for the dedicated persistence setup command.
 - Updated the Docker-init PostgreSQL schema to match the new idempotency, lease, retry, and dead-letter columns.
-- Added tests for event fingerprints, OpenProject normalization, ORM table registration, PostgreSQL conflict SQL, Redis queue behavior, retry classification, trigger/core shared parser and retry wrappers, trigger duplicate handling, worker lease SQL, retry scheduling, dead-letter recording, recoverable job scanning, persisted-event orchestrator routing, execution recording, LangGraph persistence setup wiring, and stable checkpoint resume config.
+- Added tests for event fingerprints, OpenProject normalization, ORM table registration, PostgreSQL conflict SQL, Redis queue behavior, retry classification, trigger/core shared parser and retry wrappers, trigger duplicate handling, worker lease SQL, core orchestration delegation, retry scheduling, dead-letter recording, recoverable job scanning, persisted-event orchestrator routing, execution recording, LangGraph persistence setup wiring, and stable checkpoint resume config.
 - Added an opt-in real-Postgres LangGraph restart test guarded by `LANGGRAPH_PERSISTENCE_TEST_DATABASE_URL`.
 - Added opt-in real-Postgres migration and duplicate webhook tests guarded by `PHASE3_POSTGRES_DATABASE_URL`.
 - Installed `redis>=5.2` into the repaired `.venv`.
@@ -43,10 +46,10 @@ Baseline date: 2026-07-21
 ## Runtime Compatibility Notes
 
 - `infra/agent_trigger` remains a standalone service, but its Docker image now copies the shared core package for parser and retry-policy imports.
-- The new async inbox adapter is ready for core worker integration, but the live trigger service still uses synchronous `psycopg` storage.
+- The live trigger worker still uses synchronous `psycopg` only for queue lease and compatibility job bookkeeping.
 - Duplicate delivery safety is now enforced in both the core inbox adapter and the live trigger storage path.
 - Worker lease and retry behavior is now durable in `agent_jobs`.
-- `agent_jobs` remains as the trigger service queue compatibility table; workflow execution history is now captured separately in `agent_executions`.
+- `agent_jobs` remains as the trigger service queue compatibility table; core workflow execution history is captured separately in `agent_executions`.
 - The core orchestrator resumes planning with the existing `planning-session-{session_id}` LangGraph thread ID, so checkpoint resume can work once a durable checkpointer is configured.
 - The LangGraph setup script loads `.env` by default and redacts credentials in output.
 - The setup script normalizes `postgresql+asyncpg://` to `postgresql://`, matching the driver expected by LangGraph's Postgres checkpointer.
@@ -73,7 +76,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-49 passed, 3 skipped, 4 warnings in 0.95s
+50 passed, 3 skipped, 4 warnings in 1.08s
 ```
 
 Skipped:
@@ -88,6 +91,18 @@ Warnings:
 - `test_ada.py::test_imports` returns `bool` instead of using assertions.
 - `test_ada.py::test_agent_functionality` returns `bool` instead of using assertions.
 - `test_ada.py::test_config` returns `bool` instead of using assertions.
+
+Compose validation:
+
+```powershell
+docker compose config --quiet
+```
+
+Result:
+
+```text
+passed
+```
 
 Alembic history sanity check:
 
@@ -107,7 +122,7 @@ Result:
 
 ## Remaining Phase 3 Work
 
-- Retire or narrow `agent_jobs` after the standalone trigger worker is migrated to the shared core execution path.
+- Remove the legacy trigger OpenProject client and agent placeholder after Phase 4 replaces them with the unified OpenProject adapter and coding workflow.
 - Add visible OpenProject dead-letter comments once outbound OpenProject writes have idempotency markers.
 
 ## Live PostgreSQL Verification

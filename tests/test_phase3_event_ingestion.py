@@ -170,6 +170,10 @@ def test_retry_policy_classifies_retryable_and_terminal_errors():
     assert classify_exception(ConnectionError("connection refused")).category == (
         RetryCategory.DEPENDENCY_UNAVAILABLE
     )
+    assert classify_exception(RuntimeError("HTTP 503 service unavailable")).category == (
+        RetryCategory.DEPENDENCY_UNAVAILABLE
+    )
+    assert classify_exception(RuntimeError("HTTP 503 service unavailable")).retryable
     assert classify_exception(RuntimeError("HTTP 409 conflict")).category == (
         RetryCategory.OPTIMISTIC_CONCURRENCY_CONFLICT
     )

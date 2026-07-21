@@ -1,4 +1,4 @@
-# Coding Agent Full Infrastructure
+﻿# Coding Agent Full Infrastructure
 
 This is a complete MVP infrastructure for your coding-agent idea.
 
@@ -13,7 +13,7 @@ It includes:
 | Weaviate | Vector database | http://localhost:8080 |
 | llama.cpp | Optional local LLM server | http://localhost:8082 |
 | agent-webhook | Receives OpenProject webhooks | http://localhost:8090 |
-| agent-worker | Processes events and triggers agent placeholder | internal |
+| agent-worker | Claims queued webhook jobs and delegates to planning-agent-core | internal |
 | openproject-provision | One-time zero-manual OpenProject provisioning | internal |
 
 ## What is zero-manual here?
@@ -28,7 +28,7 @@ OpenProject webhook pointing to agent-webhook
 optional starter OpenProject project
 ```
 
-The API token is saved in a Docker volume and mounted read-only into the agent worker:
+The API token is saved in a Docker volume and mounted read-only into planning-agent-core:
 
 ```text
 /agent-secrets/openproject_api_token
@@ -101,41 +101,36 @@ Use OpenProject work packages as the human-agent control surface:
 
 ```text
 Epic / Feature / Task
-        ↓
+        |
 User reviews plan and comments
-        ↓
-User moves work package to In Development
-        ↓
+        |
+User comments or updates a work package
+        |
 Webhook fires
-        ↓
-agent-worker fetches full context
-        ↓
-agent starts implementation
+        |
+agent-worker claims the queued event
+        |
+planning-agent-core orchestrates workflow resume
 ```
 
-The worker starts the coding-agent placeholder only when the work package status matches:
+The worker delegates to planning-agent-core through:
 
-```env
-AGENT_TRIGGER_STATUS_NAMES=In Development,Agent Development
+```text
+POST /v1/events/{event_id}/orchestrate
 ```
 
 ## Where to plug in the real coding agent
 
-Edit:
+The active implementation point is now the core workflow layer under:
 
 ```text
-agent_trigger/app/agent_bridge.py
+planning_agent_core/planning_agent_core/workflow/
+planning_agent_core/planning_agent_core/application/
 ```
 
-Replace:
+`infra/agent_trigger/app/agent_bridge.py` is legacy reference code and is no longer called by `agent-worker`.
 
-```python
-run_coding_agent_placeholder(...)
-```
-
-with your real coding-agent runner.
-
-That runner should eventually:
+The real coding-agent workflow should eventually:
 
 ```text
 sync OpenProject work package/comments into Neo4j
@@ -151,25 +146,23 @@ post progress/results back to OpenProject
 
 ```text
 OpenProject comment/status update
-        ↓
+        |
 agent-webhook FastAPI service
-        ↓
+        |
 PostgreSQL pm_webhook_events table
-        ↓
+        |
 Redis queue
-        ↓
+        |
 agent-worker
-        ↓
-OpenProject API fetches full work package + activities
-        ↓
-context snapshot stored in PostgreSQL
-        ↓
-agent placeholder runs if status allows
+        |
+planning-agent-core /v1/events/{event_id}/orchestrate
+        |
+planning workflow resumes or records a context-sync-only decision
 ```
 
 ## Test webhook receiver manually
 
-This only tests the receiver/queue path. It does not fetch a real work package unless ID 1 exists.
+This tests the receiver/queue path. Full event orchestration is handled by planning-agent-core.
 
 ```bash
 make test-webhook

@@ -32,6 +32,17 @@ def classify_exception(exc: BaseException) -> RetryDecision:
             "Dependency connection failed",
         )
 
+    if (
+        "server error" in text
+        or "service unavailable" in text
+        or any(status in text for status in ("500", "502", "503", "504"))
+    ):
+        return RetryDecision(
+            RetryCategory.DEPENDENCY_UNAVAILABLE,
+            True,
+            "Dependency returned a retryable server error",
+        )
+
     if "rate" in text or "capacity" in text or "429" in text:
         return RetryDecision(
             RetryCategory.RATE_OR_CAPACITY,

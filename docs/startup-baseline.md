@@ -7,7 +7,7 @@ This document records the startup expectations observed during Phase 0. It is de
 - `main.py` runs the legacy Ada agent demo from the root package layout.
 - `planning_agent_core/planning_agent_core/main.py` runs the newer FastAPI planning core.
 - `infra/agent_trigger/app/main.py` runs the OpenProject webhook receiver.
-- `infra/agent_trigger/app/worker.py` runs the Redis worker that fetches OpenProject context and triggers the coding-agent placeholder.
+- `infra/agent_trigger/app/worker.py` runs the Redis worker that claims queued webhook jobs and delegates event orchestration to `planning-agent-core`.
 
 ## Package Layout
 
@@ -30,6 +30,7 @@ This document records the startup expectations observed during Phase 0. It is de
 - Compose services include Postgres, Redis, OpenProject, OpenProject provisioning, `agent-webhook`, `agent-worker`, Neo4j, Weaviate, and `planning-agent-core`.
 - A commented llama.cpp profile is still present. The target README says the application should not host an LLM inside this Compose project.
 - `agent-worker` mounts `./infra/workspace:/workspace`.
+- `agent-worker` calls `planning-agent-core` at `PLANNING_AGENT_CORE_URL`.
 - `planning-agent-core` does not currently mount a repository workspace.
 - `planning-agent-core` uses `LLM_BASE_URL=http://localhost:8080/v1`, which points inside the container rather than the Docker host unless overridden.
 - The Compose network uses `${CODING_AGENT_DOCKER_SUBNET}`.
@@ -82,23 +83,20 @@ Required environment variables include:
 - `WEBHOOK_SIGNATURE_SECRET`
 - `WEBHOOK_REQUIRE_SIGNATURE`
 - `WEBHOOK_SIGNATURE_HEADER`
-- `OPENPROJECT_BASE_URL`
-- `OPENPROJECT_API_TOKEN_FILE`
-- `AGENT_TRIGGER_STATUS_NAMES`
+- `PLANNING_AGENT_CORE_URL`
 
 Current behavior:
 
 - Webhook receiver normalizes and stores incoming OpenProject payloads.
 - Webhook receiver pushes the stored event ID to Redis.
-- Worker fetches the stored event by ID.
-- Worker fetches the full OpenProject work package and activities.
-- Worker stores a context snapshot.
-- Worker invokes the coding-agent placeholder only for configured status names.
+- Worker claims an `agent_jobs` lease for the stored event ID.
+- Worker delegates event orchestration to `POST /v1/events/{event_id}/orchestrate` on `planning-agent-core`.
+- Worker uses the existing retry and dead-letter policy when core orchestration is unavailable or fails.
 
 ## Baseline Gaps
 
 - Database lifecycle is not migration-managed yet.
 - Webhook tables are created through container init SQL, while planning tables use SQLAlchemy `create_all()`.
 - No documented clean-clone startup path exists for the full target architecture.
-- Planning core and trigger worker are separate applications with overlapping responsibilities.
+- Planning core owns event orchestration; the trigger worker remains as queue and lease compatibility infrastructure.
 - Local LLM hosting is still exposed by legacy infrastructure docs and Makefile targets.

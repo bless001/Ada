@@ -63,6 +63,8 @@ def test_trigger_docker_build_copies_core_package_for_shared_imports():
 
     assert "COPY planning_agent_core/planning_agent_core ./planning_agent_core" in dockerfile
     assert "dockerfile: infra/agent_trigger/Dockerfile" in compose
+    assert "PLANNING_AGENT_CORE_URL: http://planning-agent-core:8000" in compose
+    assert "planning-agent-core:\n        condition: service_started" in compose
 
 
 class FakeCursor:
@@ -267,6 +269,7 @@ class FakeWorkerStore:
         self.event = event
         self.retry_calls: list[dict[str, Any]] = []
         self.dead_letter_calls: list[dict[str, Any]] = []
+        self.processed_calls: list[str] = []
 
     def claim_event(self, event_id: str, *, lease_owner: str, lease_seconds: int):
         self.claim_call = {
@@ -279,6 +282,9 @@ class FakeWorkerStore:
     def get_event(self, event_id: str):
         return self.event
 
+    def mark_processed(self, event_id: str):
+        self.processed_calls.append(event_id)
+
     def mark_retrying(self, event_id: str, **kwargs):
         self.retry_calls.append({"event_id": event_id, **kwargs})
 
@@ -286,30 +292,67 @@ class FakeWorkerStore:
         self.dead_letter_calls.append({"event_id": event_id, **kwargs})
 
 
+class FakeCoreClient:
+    def __init__(self, result: dict[str, Any] | None = None, error: Exception | None = None):
+        self.result = result or {"action": "context_sync_only"}
+        self.error = error
+        self.calls: list[str] = []
+
+    def orchestrate_event(self, event_id: str):
+        self.calls.append(event_id)
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def test_trigger_worker_delegates_claimed_event_to_core(monkeypatch):
+    trigger_worker = _import_trigger_module(monkeypatch, "app.worker")
+    trigger_storage = _import_trigger_module(monkeypatch, "app.storage")
+    core_client = FakeCoreClient(result={"action": "resume_planning"})
+    store = FakeWorkerStore(
+        lease=trigger_storage.JobLease(event_id="event-1", attempt_count=1),
+        event={},
+    )
+    monkeypatch.setattr(trigger_worker.settings, "WORKER_ID", "worker-a")
+    monkeypatch.setattr(trigger_worker.settings, "WORKER_LEASE_SECONDS", 120)
+
+    result = trigger_worker.process_event(
+        "event-1",
+        store=store,
+        core_client=core_client,
+    )
+
+    assert result.core_result == {"action": "resume_planning"}
+    assert core_client.calls == ["event-1"]
+    assert store.claim_call == {
+        "event_id": "event-1",
+        "lease_owner": "worker-a",
+        "lease_seconds": 120,
+    }
+    assert store.processed_calls == ["event-1"]
+    assert store.retry_calls == []
+    assert store.dead_letter_calls == []
+
+
 def test_trigger_worker_schedules_retry_for_transient_failures(monkeypatch):
     trigger_worker = _import_trigger_module(monkeypatch, "app.worker")
     trigger_storage = _import_trigger_module(monkeypatch, "app.storage")
 
-    class TimeoutOpenProjectClient:
-        def __init__(self, **kwargs):
-            pass
-
-        def get_work_package(self, work_package_id: str):
-            raise TimeoutError("timed out")
-
     store = FakeWorkerStore(
         lease=trigger_storage.JobLease(event_id="event-1", attempt_count=2),
-        event={"external_work_package_id": "34"},
+        event={},
     )
-    monkeypatch.setattr(trigger_worker, "OpenProjectClient", TimeoutOpenProjectClient)
-    monkeypatch.setattr(trigger_worker.settings, "OPENPROJECT_API_TOKEN", "token")
     monkeypatch.setattr(trigger_worker.settings, "WORKER_ID", "worker-a")
     monkeypatch.setattr(trigger_worker.settings, "WORKER_LEASE_SECONDS", 120)
     monkeypatch.setattr(trigger_worker.settings, "WORKER_MAX_EVENT_ATTEMPTS", 5)
     monkeypatch.setattr(trigger_worker.settings, "WORKER_RETRY_BASE_SECONDS", 3)
     monkeypatch.setattr(trigger_worker.settings, "WORKER_RETRY_MAX_SECONDS", 60)
 
-    result = trigger_worker.process_event("event-1", store=store)
+    result = trigger_worker.process_event(
+        "event-1",
+        store=store,
+        core_client=FakeCoreClient(error=TimeoutError("timed out")),
+    )
 
     assert result.requeue_after_seconds == 6
     assert store.claim_call == {
@@ -320,6 +363,7 @@ def test_trigger_worker_schedules_retry_for_transient_failures(monkeypatch):
     assert store.retry_calls[0]["retry_category"] == RetryCategory.TRANSIENT_NETWORK
     assert store.retry_calls[0]["retry_at"] > datetime.now(timezone.utc)
     assert store.dead_letter_calls == []
+    assert store.processed_calls == []
 
 
 def test_trigger_worker_dead_letters_terminal_failures(monkeypatch):
@@ -327,14 +371,17 @@ def test_trigger_worker_dead_letters_terminal_failures(monkeypatch):
     trigger_storage = _import_trigger_module(monkeypatch, "app.storage")
     store = FakeWorkerStore(
         lease=trigger_storage.JobLease(event_id="event-1", attempt_count=1),
-        event={"external_work_package_id": "34"},
+        event={},
     )
-    monkeypatch.setattr(trigger_worker.settings, "OPENPROJECT_API_TOKEN", "")
-    monkeypatch.setattr(trigger_worker.settings, "OPENPROJECT_API_TOKEN_FILE", "")
 
-    result = trigger_worker.process_event("event-1", store=store)
+    result = trigger_worker.process_event(
+        "event-1",
+        store=store,
+        core_client=FakeCoreClient(error=ValueError("bad event")),
+    )
 
     assert result.requeue_after_seconds is None
     assert store.retry_calls == []
-    assert store.dead_letter_calls[0]["retry_category"] == RetryCategory.UNKNOWN
+    assert store.dead_letter_calls[0]["retry_category"] == RetryCategory.INVALID_INPUT
     assert store.dead_letter_calls[0]["retryable"] is False
+    assert store.processed_calls == []

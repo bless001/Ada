@@ -28,7 +28,7 @@ This map records where existing code should land as the repository moves toward 
 | `infra/agent_trigger/app/storage.py` | `adapters/persistence/webhook_inbox.py` | Wrap first, then migrate to async SQLAlchemy and Alembic. |
 | `infra/agent_trigger/app/event_parser.py` | `domain/events.py` plus `application/event_classification.py` | Convert to typed event envelopes and deterministic classification. |
 | `infra/agent_trigger/app/openproject_client.py` | `adapters/openproject/` | Merge with async OpenProject adapter. |
-| `infra/agent_trigger/app/worker.py` | `workers/event_worker.py` | Preserve queue semantics; add lease, retry, and dead-letter behavior. |
+| `infra/agent_trigger/app/worker.py` | `workers/event_worker.py` | Queue/lease compatibility remains here; event orchestration now delegates to `planning_agent_core`. |
 | `infra/postgres/init/01-agent-schema.sql` | Alembic migrations | Convert schema to migrations; stop relying on init SQL for app-owned tables. |
 | `src/parser/` | `adapters/repository_analysis/` | Wrap behind repository-analysis port after path containment policy exists. |
 | `src/execution/code_executor.py` | `adapters/command_runner/` | Do not reuse until command allowlist, timeout, output limit, and secret redaction exist. |
