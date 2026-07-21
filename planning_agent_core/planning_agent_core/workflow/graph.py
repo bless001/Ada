@@ -3,13 +3,27 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from planning_agent_core.skills.registry import SkillRegistry
 from planning_agent_core.workflow.nodes import make_nodes
 from planning_agent_core.workflow.routing import route_after_skill
 from planning_agent_core.workflow.state import PlanningGraphState
 
 
-def build_planning_graph(db: AsyncSession, checkpointer, store):
-    nodes = make_nodes(db)
+def build_planning_graph(
+    db: AsyncSession | None,
+    checkpointer,
+    store,
+    *,
+    registry: SkillRegistry | None = None,
+    planning_service=None,
+    capsule_service=None,
+):
+    nodes = make_nodes(
+        db,
+        registry=registry,
+        planning_service=planning_service,
+        capsule_service=capsule_service,
+    )
 
     graph = StateGraph(PlanningGraphState)
 

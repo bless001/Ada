@@ -26,12 +26,15 @@ Baseline date: 2026-07-20
 - Added `AgentRegistry` and default planning/coding/verification agent definitions.
 - Added `SkillNodeAdapter` for generic workflow skill execution.
 - Wired the existing planning workflow node through `SkillNodeAdapter`.
+- Added opt-in constructor-aware registration for database-backed `document_ingestion`.
+- Added injectable workflow dependencies so planning graphs can run with fake skill registries and fake services.
 - Added fake-skill runtime tests for input/output validation.
+- Added fake planning workflow execution coverage.
 
 ## Runtime Compatibility Notes
 
-- `build_skill_registry()` still registers only the currently runnable planning workflow skills: `ambiguity_assessment` and `planning_decomposition`.
-- `document_ingestion` is declared as implemented in its manifest because code exists, but it is not yet routed into the current graph by default.
+- `build_skill_registry()` still registers only the currently runnable default planning workflow skills: `ambiguity_assessment` and `planning_decomposition`.
+- `document_ingestion` is declared as implemented and can be registered with `include_database_skills=True` plus a database session, but it is not enabled in the default graph yet because the current graph does not process its output.
 - Planned manifests make missing skill work explicit without pretending empty modules are runnable.
 - Current graph state transitions remain unchanged after skill execution.
 
@@ -53,7 +56,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-11 passed, 3 warnings in 0.85s
+14 passed, 3 warnings in 1.07s
 ```
 
 Warnings:
@@ -77,9 +80,7 @@ Result:
 
 ## Remaining Phase 2 Work
 
-- Implement manifest-backed loading for skills that need constructor dependencies, such as database-backed `document_ingestion`.
 - Add contract tests for each implemented production skill.
 - Add negative tests for malformed built-in manifest files.
-- Add workflow tests that execute a planning graph with fake skills and fake adapters.
 - Move direct LLM planning fallback behavior behind a skill or compatibility adapter.
 - Add skill-run persistence and audit records.

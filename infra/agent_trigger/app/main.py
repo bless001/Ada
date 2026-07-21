@@ -43,21 +43,24 @@ async def receive_openproject_webhook(request: Request):
 
     normalized = normalize_openproject_event(payload, headers)
 
-    event_id = store.insert_event(
+    stored_event = store.insert_event(
         source_tool=normalized["source_tool"],
         event_type=normalized["event_type"],
         external_project_id=normalized["external_project_id"],
         external_work_package_id=normalized["external_work_package_id"],
         external_comment_id=normalized["external_comment_id"],
+        idempotency_key=normalized["idempotency_key"],
         headers=headers,
         payload=payload,
     )
 
-    redis_client.lpush(settings.REDIS_QUEUE, event_id)
+    if stored_event.created:
+        redis_client.lpush(settings.REDIS_QUEUE, stored_event.event_id)
 
     return {
-        "status": "accepted",
-        "event_id": event_id,
+        "status": "accepted" if stored_event.created else "duplicate",
+        "event_id": stored_event.event_id,
         "event_type": normalized["event_type"],
         "work_package_id": normalized["external_work_package_id"],
+        "queued": stored_event.created,
     }

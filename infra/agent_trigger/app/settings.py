@@ -1,4 +1,5 @@
 from pathlib import Path
+from socket import gethostname
 
 from pydantic_settings import BaseSettings
 
@@ -18,6 +19,11 @@ class Settings(BaseSettings):
     OPENPROJECT_API_HOST_HEADER: str = ""
 
     AGENT_TRIGGER_STATUS_NAMES: str = "In Development,Agent Development"
+    WORKER_ID: str = gethostname()
+    WORKER_LEASE_SECONDS: int = 300
+    WORKER_MAX_EVENT_ATTEMPTS: int = 5
+    WORKER_RETRY_BASE_SECONDS: int = 30
+    WORKER_RETRY_MAX_SECONDS: int = 600
 
     NEO4J_URI: str = "bolt://neo4j:7687"
     NEO4J_USER: str = "neo4j"

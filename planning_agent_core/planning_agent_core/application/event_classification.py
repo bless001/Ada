@@ -1,7 +1,9 @@
-import hashlib
-import json
+from __future__ import annotations
+
 import re
 from typing import Any
+
+from planning_agent_core.domain.events import EventEnvelope
 
 WORK_PACKAGE_HREF_RE = re.compile(r"/api/v3/work_packages/(\d+)")
 PROJECT_HREF_RE = re.compile(r"/api/v3/projects/(\d+)")
@@ -17,7 +19,7 @@ def _walk(value: Any):
             yield from _walk(item)
 
 
-def find_first_key(payload: dict, names: set[str]) -> str | None:
+def find_first_key(payload: dict[str, Any], names: set[str]) -> str | None:
     for obj in _walk(payload):
         for key, value in obj.items():
             if key in names and value is not None:
@@ -25,7 +27,7 @@ def find_first_key(payload: dict, names: set[str]) -> str | None:
     return None
 
 
-def find_work_package_id(payload: dict) -> str | None:
+def find_work_package_id(payload: dict[str, Any]) -> str | None:
     direct = find_first_key(payload, {"work_package_id", "workPackageId", "workPackageID"})
     if direct and direct.isdigit():
         return direct
@@ -54,7 +56,7 @@ def find_work_package_id(payload: dict) -> str | None:
     return None
 
 
-def find_project_id(payload: dict) -> str | None:
+def find_project_id(payload: dict[str, Any]) -> str | None:
     direct = find_first_key(payload, {"project_id", "projectId", "projectID"})
     if direct:
         return direct
@@ -74,7 +76,7 @@ def find_project_id(payload: dict) -> str | None:
     return None
 
 
-def find_comment_id(payload: dict) -> str | None:
+def find_comment_id(payload: dict[str, Any]) -> str | None:
     direct = find_first_key(payload, {"comment_id", "commentId", "activity_id", "activityId"})
     if direct:
         return direct
@@ -86,10 +88,11 @@ def find_comment_id(payload: dict) -> str | None:
     return None
 
 
-def infer_event_type(payload: dict, headers: dict[str, str]) -> str:
+def infer_event_type(payload: dict[str, Any], headers: dict[str, str]) -> str:
+    normalized_headers = {key.lower(): value for key, value in headers.items()}
     for header_name in ("x-op-event", "x-openproject-event", "x-event-name", "x-webhook-event"):
-        if headers.get(header_name):
-            return headers[header_name]
+        if normalized_headers.get(header_name):
+            return normalized_headers[header_name]
 
     for key in ("event_name", "event", "action", "type"):
         value = payload.get(key)
@@ -99,56 +102,17 @@ def infer_event_type(payload: dict, headers: dict[str, str]) -> str:
     return "unknown"
 
 
-def canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        default=str,
-    )
-
-
-def calculate_event_idempotency_key(
-    *,
-    source_tool: str,
-    event_type: str,
-    external_project_id: str | None,
-    external_work_package_id: str | None,
-    external_comment_id: str | None,
+def normalize_openproject_event(
     payload: dict[str, Any],
-) -> str:
-    fingerprint_input = {
-        "source": source_tool,
-        "event_type": event_type,
-        "external_project_id": external_project_id,
-        "external_work_package_id": external_work_package_id,
-        "external_comment_id": external_comment_id,
-        "payload": payload,
-    }
-    digest = hashlib.sha256(canonical_json(fingerprint_input).encode("utf-8")).hexdigest()
-    return f"{source_tool}:{digest}"
-
-
-def normalize_openproject_event(payload: dict, headers: dict[str, str]) -> dict:
-    source_tool = "openproject"
-    event_type = infer_event_type(payload, headers)
-    external_project_id = find_project_id(payload)
-    external_work_package_id = find_work_package_id(payload)
-    external_comment_id = find_comment_id(payload)
-
-    return {
-        "source_tool": source_tool,
-        "event_type": event_type,
-        "external_project_id": external_project_id,
-        "external_work_package_id": external_work_package_id,
-        "external_comment_id": external_comment_id,
-        "idempotency_key": calculate_event_idempotency_key(
-            source_tool=source_tool,
-            event_type=event_type,
-            external_project_id=external_project_id,
-            external_work_package_id=external_work_package_id,
-            external_comment_id=external_comment_id,
-            payload=payload,
-        ),
-    }
+    headers: dict[str, str],
+) -> EventEnvelope:
+    normalized_headers = {key.lower(): value for key, value in headers.items()}
+    return EventEnvelope(
+        source="openproject",
+        event_type=infer_event_type(payload, normalized_headers),
+        external_project_id=find_project_id(payload),
+        external_work_package_id=find_work_package_id(payload),
+        external_comment_id=find_comment_id(payload),
+        headers=normalized_headers,
+        payload=payload,
+    )

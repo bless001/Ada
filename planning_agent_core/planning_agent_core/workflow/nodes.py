@@ -9,16 +9,26 @@ from planning_agent_core.services.planning_service import PlanningService
 from planning_agent_core.services.context_capsule_service import ContextCapsuleService
 from planning_agent_core.skills import build_skill_registry
 from planning_agent_core.skills.base import SkillContext
+from planning_agent_core.skills.registry import SkillRegistry
 from planning_agent_core.skills.router import SkillRouter
 from planning_agent_core.workflow.skill_node import SkillNodeAdapter
 from planning_agent_core.workflow.state import PlanningGraphState
 
 
-def make_nodes(db: AsyncSession):
-    planning_service = PlanningService(db)
-    capsule_service = ContextCapsuleService(db)
+def make_nodes(
+    db: AsyncSession | None,
+    *,
+    registry: SkillRegistry | None = None,
+    planning_service: Any | None = None,
+    capsule_service: Any | None = None,
+):
+    if db is None and planning_service is None:
+        raise ValueError("A database session or planning service is required")
 
-    registry = build_skill_registry()
+    planning_service = planning_service or PlanningService(db)
+    capsule_service = capsule_service or ContextCapsuleService(db)
+
+    registry = registry or build_skill_registry()
     skill_router = SkillRouter(registry)
     skill_node = SkillNodeAdapter(registry)
 

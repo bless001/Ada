@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -189,3 +189,82 @@ class ContextCapsule(Base):
     source_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     token_estimate: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class WebhookEvent(Base):
+    __tablename__ = "pm_webhook_events"
+    __table_args__ = (
+        CheckConstraint(
+            "processing_status IN ('pending', 'processing', 'processed', 'failed', 'dead_letter')",
+            name="ck_pm_webhook_events_processing_status",
+        ),
+        Index("idx_pm_webhook_events_status", "processing_status", "received_at"),
+        Index("idx_pm_webhook_events_work_package", "external_work_package_id"),
+        Index("idx_pm_webhook_events_retry", "processing_status", "retry_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    idempotency_key: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    source_tool: Mapped[str] = mapped_column(Text, nullable=False, default="openproject")
+    event_type: Mapped[str] = mapped_column(Text, nullable=False, default="unknown")
+    external_project_id: Mapped[str | None] = mapped_column(Text)
+    external_work_package_id: Mapped[str | None] = mapped_column(Text)
+    external_comment_id: Mapped[str | None] = mapped_column(Text)
+    headers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    processing_status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class AgentJob(Base):
+    __tablename__ = "agent_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'done', 'failed', 'dead_letter')",
+            name="ck_agent_jobs_status",
+        ),
+        Index("idx_agent_jobs_status", "status", "created_at"),
+        Index("idx_agent_jobs_retry", "status", "retry_at"),
+        Index("idx_agent_jobs_lease", "lease_expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    event_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("pm_webhook_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    job_type: Mapped[str] = mapped_column(Text, nullable=False, default="process_pm_event")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="queued")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    last_error: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class OpenProjectContextSnapshot(Base):
+    __tablename__ = "pm_context_snapshots"
+    __table_args__ = (
+        Index("idx_pm_context_snapshots_wp", "external_work_package_id", "synced_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    source_tool: Mapped[str] = mapped_column(Text, nullable=False, default="openproject")
+    external_work_package_id: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str | None] = mapped_column(Text)
+    status_name: Mapped[str | None] = mapped_column(Text)
+    type_name: Mapped[str | None] = mapped_column(Text)
+    project_name: Mapped[str | None] = mapped_column(Text)
+    description_raw: Mapped[str | None] = mapped_column(Text)
+    work_package_payload: Mapped[dict | None] = mapped_column(JSONB)
+    activities_payload: Mapped[dict | None] = mapped_column(JSONB)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

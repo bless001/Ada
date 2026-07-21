@@ -50,6 +50,11 @@ def test_settings_accept_current_and_target_environment_names(monkeypatch):
     repo_root = Path(__file__).resolve().parents[1]
     monkeypatch.syspath_prepend(str(repo_root / "planning_agent_core"))
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("CHECKPOINT_DATABASE_URL", raising=False)
+    monkeypatch.delenv("OPENPROJECT_API_KEY", raising=False)
+    monkeypatch.delenv("NEO4J_USER", raising=False)
+
     monkeypatch.setenv("POSTGRES_DSN", "postgresql+asyncpg://user:pass@localhost:5432/app")
     monkeypatch.setenv("LANGGRAPH_POSTGRES_DSN", "postgresql://user:pass@localhost:5432/app")
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:8080/v1")
