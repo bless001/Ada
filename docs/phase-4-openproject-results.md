@@ -16,7 +16,12 @@ Baseline date: 2026-07-21
 - Added semantic mapping for OpenProject work-package types, statuses, priorities, approvals, feedback intents, and verification outcomes.
 - Added `OpenProjectSemanticMapper` and `OpenProjectResourceCatalog` so provisioning can resolve names to HAL links without hard-coded numeric IDs.
 - Added OpenProject adapter discovery methods for types, statuses, priorities, and resource-catalog loading.
-- Updated the opt-in live PostgreSQL integration test to expect Alembic head `0005_op_outbound_ops`.
+- Added `openproject_reconciliation_snapshots` for preserving OpenProject state before agent updates.
+- Added Alembic migration `0006_op_reconciliation`.
+- Added `OpenProjectReconciliationStorePort` and `SqlAlchemyOpenProjectReconciliationStore`.
+- Added deterministic reconciliation summaries for changed subject, description, status, type, and priority fields.
+- Updated the OpenProject adapter to capture work-package payloads and activities before PATCH updates, and work-package payloads before idempotent comments.
+- Updated the opt-in live PostgreSQL integration test to expect Alembic head `0006_op_reconciliation`.
 
 ## Runtime Compatibility Notes
 
@@ -27,6 +32,9 @@ Baseline date: 2026-07-21
 - Feedback classification is deterministic and marker-based.
 - Semantic mapping is name-based and fails clearly when provisioning has not supplied a required OpenProject type, status, or priority link.
 - Vision and Capability plan nodes are not projected as work packages by default; the default OpenProject hierarchy starts at Epic, then Story, then Task.
+- Reconciliation capture is opt-in through `OpenProjectReconciliationStorePort`; adapter writes remain a no-op for snapshots unless a store is supplied.
+- Snapshot capture happens after an outbound idempotency claim is accepted and before the OpenProject mutation is issued.
+- Reconciliation summaries are metadata only; the complete pre-update OpenProject payload remains the source of truth for preserving human edits.
 
 ## Verification
 
@@ -40,7 +48,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-24 passed in 0.38s
+28 passed in 0.48s
 ```
 
 Full suite command:
@@ -53,7 +61,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-66 passed, 3 skipped, 4 warnings in 1.21s
+70 passed, 3 skipped, 4 warnings in 1.27s
 ```
 
 Live PostgreSQL command:
@@ -69,13 +77,14 @@ docker rm -f ada-phase4-pg-$PID
 Result:
 
 ```text
-3 passed in 1.86s
+3 passed in 2.04s
 ```
 
 Alembic history:
 
 ```text
-0004_agent_executions -> 0005_op_outbound_ops (head), add OpenProject outbound operation idempotency
+0005_op_outbound_ops -> 0006_op_reconciliation (head), add OpenProject reconciliation snapshots
+0004_agent_executions -> 0005_op_outbound_ops, add OpenProject outbound operation idempotency
 0003_agent_job_leases -> 0004_agent_executions, add agent execution tracking
 0002_webhook_event_idempotency -> 0003_agent_job_leases, add agent job leases and retry scheduling
 0001_current_baseline -> 0002_webhook_event_idempotency, add webhook event idempotency key
@@ -84,7 +93,6 @@ Alembic history:
 
 ## Remaining Phase 4 Work
 
-- Persist reconciliation snapshots that preserve human edits before agent updates.
 - Upsert `ExternalArtifact` mappings as projection workflows create or discover OpenProject work packages.
 - Add approval records and explicit resume logic for planning and task-completion approvals.
 - Update OpenProject provisioning for idempotent discovery of types, statuses, custom fields, webhooks, permissions, and sample binding.

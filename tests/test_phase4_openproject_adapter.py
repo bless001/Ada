@@ -19,9 +19,15 @@ from planning_agent_core.application.openproject_feedback import (
 )
 from planning_agent_core.application.project_orchestrator import should_resume_planning
 from planning_agent_core.domain.events import EventEnvelope
-from planning_agent_core.models import OpenProjectOutboundOperation
+from planning_agent_core.models import (
+    OpenProjectOutboundOperation,
+    OpenProjectReconciliationSnapshot,
+)
 from planning_agent_core.persistence.openproject_outbox import (
     SqlAlchemyOpenProjectOutboundStore,
+)
+from planning_agent_core.persistence.openproject_reconciliation import (
+    SqlAlchemyOpenProjectReconciliationStore,
 )
 from planning_agent_core.ports.openproject import (
     OpenProjectOperationClaim,
@@ -50,6 +56,23 @@ def test_openproject_outbound_operation_model_tracks_idempotent_mutations():
     assert "ck_openproject_outbound_operations_status" in constraints
 
 
+def test_openproject_reconciliation_snapshot_model_preserves_pre_update_state():
+    assert (
+        OpenProjectReconciliationSnapshot.__tablename__
+        == "openproject_reconciliation_snapshots"
+    )
+
+    columns = OpenProjectReconciliationSnapshot.__table__.columns
+    assert "outbound_idempotency_key" in columns
+    assert "operation_type" in columns
+    assert "target_artifact_type" in columns
+    assert "target_external_id" in columns
+    assert "before_payload" in columns
+    assert "before_activities_payload" in columns
+    assert "agent_payload" in columns
+    assert "detected_human_edits" in columns
+
+
 class FakeSession:
     def __init__(self, scalar_results: list[Any]):
         self.scalar_results = scalar_results
@@ -66,6 +89,18 @@ class FakeSession:
 
     async def rollback(self):
         self.rollbacks += 1
+
+
+class FakeAddSession:
+    def __init__(self):
+        self.added: list[Any] = []
+        self.commits = 0
+
+    def add(self, item):
+        self.added.append(item)
+
+    async def commit(self):
+        self.commits += 1
 
 
 @pytest.mark.asyncio
@@ -147,6 +182,44 @@ async def test_openproject_outbound_store_marks_success_and_failure():
     assert failed.error_message == "bad request"
     assert failed.completed_at is not None
     assert failure_session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_openproject_reconciliation_store_records_snapshot():
+    session = FakeAddSession()
+    await SqlAlchemyOpenProjectReconciliationStore(session).record_snapshot(
+        outbound_idempotency_key="op:wp:1",
+        operation_type=OpenProjectOperationType.CREATE_OR_UPDATE_WORK_PACKAGE,
+        target_artifact_type="work_package",
+        target_external_id="34",
+        before_payload={"subject": "Human edit"},
+        before_activities_payload={"_embedded": {"elements": []}},
+        agent_payload={"subject": "Agent edit"},
+        detected_human_edits=[
+            {
+                "field": "subject",
+                "before": "Human edit",
+                "agent": "Agent edit",
+            }
+        ],
+    )
+
+    snapshot = session.added[0]
+    assert snapshot.outbound_idempotency_key == "op:wp:1"
+    assert snapshot.operation_type == (
+        OpenProjectOperationType.CREATE_OR_UPDATE_WORK_PACKAGE.value
+    )
+    assert snapshot.before_payload == {"subject": "Human edit"}
+    assert snapshot.before_activities_payload == {"_embedded": {"elements": []}}
+    assert snapshot.agent_payload == {"subject": "Agent edit"}
+    assert snapshot.detected_human_edits == [
+        {
+            "field": "subject",
+            "before": "Human edit",
+            "agent": "Agent edit",
+        }
+    ]
+    assert session.commits == 1
 
 
 def test_openproject_adapter_loads_token_file_and_marks_comments(tmp_path):
@@ -290,6 +363,14 @@ class FakeOutboundStore:
         self.failed_calls.append(kwargs)
 
 
+class FakeReconciliationStore:
+    def __init__(self):
+        self.snapshot_calls: list[dict[str, Any]] = []
+
+    async def record_snapshot(self, **kwargs):
+        self.snapshot_calls.append(kwargs)
+
+
 class FakeResponse:
     def __init__(self, payload: dict[str, Any], error: Exception | None = None):
         self.payload = payload
@@ -428,3 +509,134 @@ async def test_openproject_adapter_create_work_package_is_claimed_before_post():
         }
     ]
     assert store.succeeded_calls[0]["response_payload"] == {"id": 77}
+
+
+@pytest.mark.asyncio
+async def test_openproject_adapter_records_reconciliation_snapshot_before_update():
+    store = FakeOutboundStore(
+        OpenProjectOperationClaim(
+            idempotency_key="op:wp:34",
+            operation_type=OpenProjectOperationType.CREATE_OR_UPDATE_WORK_PACKAGE,
+            status=OpenProjectOperationStatus.PENDING,
+            should_execute=True,
+        )
+    )
+    reconciliation_store = FakeReconciliationStore()
+    before_payload = {
+        "id": 34,
+        "subject": "Human subject",
+        "description": {"raw": "Human description"},
+        "_links": {
+            "status": {"title": "Ready"},
+            "type": {"title": "Task"},
+        },
+    }
+    activities_payload = {"_embedded": {"elements": [{"id": 1}]}}
+    agent_payload = {
+        "id": "34",
+        "subject": "Agent subject",
+        "description": {"raw": "Agent description"},
+        "_links": {
+            "status": {"title": "In progress"},
+            "type": {"title": "Task"},
+        },
+    }
+    http_client = FakeHttpClient(
+        [
+            FakeResponse(before_payload),
+            FakeResponse(activities_payload),
+            FakeResponse({"id": 34, "subject": "Agent subject"}),
+        ]
+    )
+    client = OpenProjectClient(
+        outbound_store=store,
+        reconciliation_store=reconciliation_store,
+        http_client=http_client,
+    )
+
+    result = await client.create_or_update_work_package(
+        project_id="12",
+        external_idempotency_key="op:wp:34",
+        payload=agent_payload,
+    )
+
+    assert result == {"id": 34, "subject": "Agent subject"}
+    assert [request["method"] for request in http_client.requests] == [
+        "GET",
+        "GET",
+        "PATCH",
+    ]
+    assert [request["path"] for request in http_client.requests] == [
+        "/work_packages/34",
+        "/work_packages/34/activities",
+        "/work_packages/34",
+    ]
+    assert reconciliation_store.snapshot_calls[0]["before_payload"] == before_payload
+    assert reconciliation_store.snapshot_calls[0]["before_activities_payload"] == (
+        activities_payload
+    )
+    assert reconciliation_store.snapshot_calls[0]["agent_payload"] == agent_payload
+    assert reconciliation_store.snapshot_calls[0]["detected_human_edits"] == [
+        {
+            "field": "subject",
+            "before": "Human subject",
+            "agent": "Agent subject",
+        },
+        {
+            "field": "description.raw",
+            "before": "Human description",
+            "agent": "Agent description",
+        },
+        {
+            "field": "status",
+            "before": "Ready",
+            "agent": "In progress",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openproject_adapter_records_reconciliation_snapshot_before_comment():
+    store = FakeOutboundStore(
+        OpenProjectOperationClaim(
+            idempotency_key="op:comment:34",
+            operation_type=OpenProjectOperationType.ADD_COMMENT,
+            status=OpenProjectOperationStatus.PENDING,
+            should_execute=True,
+        )
+    )
+    reconciliation_store = FakeReconciliationStore()
+    before_payload = {
+        "_links": {
+            "addComment": {
+                "href": "/api/v3/work_packages/34/activities",
+            }
+        }
+    }
+    http_client = FakeHttpClient(
+        [
+            FakeResponse(before_payload),
+            FakeResponse({"id": "activity-1"}),
+        ]
+    )
+    client = OpenProjectClient(
+        outbound_store=store,
+        reconciliation_store=reconciliation_store,
+        http_client=http_client,
+    )
+
+    await client.add_comment(
+        work_package_id="34",
+        external_idempotency_key="op:comment:34",
+        markdown="Agent update",
+    )
+
+    assert reconciliation_store.snapshot_calls[0]["operation_type"] == (
+        OpenProjectOperationType.ADD_COMMENT
+    )
+    assert reconciliation_store.snapshot_calls[0]["target_external_id"] == "34"
+    assert reconciliation_store.snapshot_calls[0]["before_payload"] == before_payload
+    assert has_openproject_idempotency_marker(
+        reconciliation_store.snapshot_calls[0]["agent_payload"]["comment"]["raw"],
+        "op:comment:34",
+    )

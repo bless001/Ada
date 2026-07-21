@@ -50,7 +50,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
     with psycopg.connect(_to_psycopg_url(migrated_postgres_url)) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
-            assert cur.fetchone()[0] == "0005_op_outbound_ops"
+            assert cur.fetchone()[0] == "0006_op_reconciliation"
 
             cur.execute(
                 """
@@ -62,6 +62,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                       'agent_jobs',
                       'agent_executions',
                       'openproject_outbound_operations',
+                      'openproject_reconciliation_snapshots',
                       'pm_context_snapshots'
                   )
                 ORDER BY table_name
@@ -71,6 +72,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                 "agent_executions",
                 "agent_jobs",
                 "openproject_outbound_operations",
+                "openproject_reconciliation_snapshots",
                 "pm_context_snapshots",
                 "pm_webhook_events",
             ]

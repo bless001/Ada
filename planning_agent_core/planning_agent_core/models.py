@@ -207,6 +207,41 @@ class OpenProjectOutboundOperation(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class OpenProjectReconciliationSnapshot(Base):
+    __tablename__ = "openproject_reconciliation_snapshots"
+    __table_args__ = (
+        Index(
+            "idx_openproject_reconciliation_snapshots_target",
+            "target_artifact_type",
+            "target_external_id",
+            "captured_at",
+        ),
+        Index(
+            "idx_openproject_reconciliation_snapshots_outbound_key",
+            "outbound_idempotency_key",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
+    artifact_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("external_artifacts.id", ondelete="SET NULL"),
+    )
+    outbound_idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_artifact_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    before_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    before_activities_payload: Mapped[dict | None] = mapped_column(JSONB)
+    agent_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    detected_human_edits: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class ProvisioningJob(Base):
     __tablename__ = "provisioning_jobs"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)

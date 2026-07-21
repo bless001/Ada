@@ -58,6 +58,24 @@ class OpenProjectOutboundStorePort(Protocol):
         ...
 
 
+class OpenProjectReconciliationStorePort(Protocol):
+    async def record_snapshot(
+        self,
+        *,
+        outbound_idempotency_key: str,
+        operation_type: OpenProjectOperationType,
+        target_artifact_type: str,
+        target_external_id: str,
+        before_payload: dict[str, Any],
+        agent_payload: dict[str, Any],
+        before_activities_payload: dict[str, Any] | None = None,
+        detected_human_edits: list[dict[str, Any]] | None = None,
+        project_id: UUID | None = None,
+        artifact_id: UUID | None = None,
+    ) -> None:
+        ...
+
+
 class OpenProjectPort(Protocol):
     async def get_work_package(self, work_package_id: str) -> dict[str, Any]:
         ...

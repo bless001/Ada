@@ -12,12 +12,16 @@ from planning_agent_core.application.openproject_feedback import (
     openproject_idempotency_marker,
 )
 from planning_agent_core.application.openproject_mapping import OpenProjectResourceCatalog
+from planning_agent_core.application.openproject_reconciliation import (
+    detect_human_edit_summary,
+)
 from planning_agent_core.config import settings
 from planning_agent_core.ports.openproject import (
     OpenProjectOperationClaim,
     OpenProjectOperationStatus,
     OpenProjectOperationType,
     OpenProjectOutboundStorePort,
+    OpenProjectReconciliationStorePort,
 )
 
 __all__ = [
@@ -58,6 +62,7 @@ class OpenProjectClient:
         self,
         *,
         outbound_store: OpenProjectOutboundStorePort | None = None,
+        reconciliation_store: OpenProjectReconciliationStorePort | None = None,
         http_client: Any | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
@@ -65,6 +70,7 @@ class OpenProjectClient:
         request_timeout_seconds: int | None = None,
     ) -> None:
         self.outbound_store = outbound_store
+        self.reconciliation_store = reconciliation_store
         self._owns_client = http_client is None
         if http_client is not None:
             self.client = http_client
@@ -150,6 +156,19 @@ class OpenProjectClient:
 
         try:
             if target_external_id:
+                before_payload = await self.get_work_package(target_external_id)
+                before_activities_payload = await self.list_work_package_activities(
+                    target_external_id
+                )
+                await self._record_reconciliation_snapshot(
+                    outbound_idempotency_key=external_idempotency_key,
+                    operation_type=OpenProjectOperationType.CREATE_OR_UPDATE_WORK_PACKAGE,
+                    target_artifact_type="work_package",
+                    target_external_id=target_external_id,
+                    before_payload=before_payload,
+                    before_activities_payload=before_activities_payload,
+                    agent_payload=payload,
+                )
                 response = await self.request(
                     "PATCH",
                     f"/work_packages/{target_external_id}",
@@ -201,6 +220,18 @@ class OpenProjectClient:
 
         try:
             work_package = await self.get_work_package(work_package_id)
+            await self._record_reconciliation_snapshot(
+                outbound_idempotency_key=external_idempotency_key,
+                operation_type=OpenProjectOperationType.ADD_COMMENT,
+                target_artifact_type="work_package",
+                target_external_id=work_package_id,
+                before_payload=work_package,
+                agent_payload={
+                    "comment": {
+                        "raw": marked_markdown,
+                    }
+                },
+            )
             add_comment_href = (
                 work_package.get("_links", {})
                 .get("addComment", {})
@@ -237,6 +268,33 @@ class OpenProjectClient:
                 "OpenProject outbound_store is required for idempotent mutations"
             )
         return self.outbound_store
+
+    async def _record_reconciliation_snapshot(
+        self,
+        *,
+        outbound_idempotency_key: str,
+        operation_type: OpenProjectOperationType,
+        target_artifact_type: str,
+        target_external_id: str,
+        before_payload: dict[str, Any],
+        agent_payload: dict[str, Any],
+        before_activities_payload: dict[str, Any] | None = None,
+    ) -> None:
+        if self.reconciliation_store is None:
+            return
+        await self.reconciliation_store.record_snapshot(
+            outbound_idempotency_key=outbound_idempotency_key,
+            operation_type=operation_type,
+            target_artifact_type=target_artifact_type,
+            target_external_id=target_external_id,
+            before_payload=before_payload,
+            before_activities_payload=before_activities_payload,
+            agent_payload=agent_payload,
+            detected_human_edits=detect_human_edit_summary(
+                before_payload=before_payload,
+                agent_payload=agent_payload,
+            ),
+        )
 
 
 def _work_package_id_from_payload(payload: dict[str, Any]) -> str | None:
