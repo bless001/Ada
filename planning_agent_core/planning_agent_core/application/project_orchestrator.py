@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from planning_agent_core.domain.enums import AgentExecutionStatus, PlanningSessionStatus
 from planning_agent_core.domain.events import EventEnvelope
+from planning_agent_core.application.openproject_feedback import classify_openproject_feedback
 from planning_agent_core.models import ExternalArtifact, PlanningSession
 from planning_agent_core.ports.event_inbox import EventInboxPort
 from planning_agent_core.ports.executions import AgentExecutionRecorderPort
@@ -222,14 +223,7 @@ class ProjectEventOrchestrator:
 
 
 def should_resume_planning(envelope: EventEnvelope) -> bool:
-    event_type = envelope.event_type.lower()
-    payload_action = str(envelope.payload.get("action", "")).lower()
-
-    if envelope.external_comment_id:
-        return True
-
-    markers = ("comment", "approval", "approve", "resume", "rework")
-    return any(marker in event_type or marker in payload_action for marker in markers)
+    return classify_openproject_feedback(envelope).resumable
 
 
 def classify_workflow_completion(workflow_result: dict[str, Any]) -> AgentExecutionStatus:

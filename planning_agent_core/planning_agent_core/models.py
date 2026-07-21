@@ -162,6 +162,51 @@ class ExternalArtifact(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
+class OpenProjectOutboundOperation(Base):
+    __tablename__ = "openproject_outbound_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_openproject_outbound_operations_idempotency_key",
+        ),
+        CheckConstraint(
+            "operation_type IN ('create_or_update_work_package', 'add_comment')",
+            name="ck_openproject_outbound_operations_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'succeeded', 'failed')",
+            name="ck_openproject_outbound_operations_status",
+        ),
+        Index("idx_openproject_outbound_operations_status", "status", "created_at"),
+        Index(
+            "idx_openproject_outbound_operations_target",
+            "target_artifact_type",
+            "target_external_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
+    artifact_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("external_artifacts.id", ondelete="SET NULL"),
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending")
+    target_artifact_type: Mapped[str | None] = mapped_column(String(80))
+    target_external_id: Mapped[str | None] = mapped_column(Text)
+    request_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    response_payload: Mapped[dict | None] = mapped_column(JSONB)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ProvisioningJob(Base):
     __tablename__ = "provisioning_jobs"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)

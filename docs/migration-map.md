@@ -21,13 +21,13 @@ This map records where existing code should land as the repository moves toward 
 | `planning_agent_core/planning_agent_core/skills/base.py` | `skills/contracts.py` | Add manifest, input/output validation, and side-effect metadata. |
 | `planning_agent_core/planning_agent_core/skills/registry.py` | `skills/registry.py` | Extend to manifest loading and duplicate/incompatible manifest checks. |
 | `planning_agent_core/planning_agent_core/workflow/` | `workflow/planning/`, `workflow/coding/`, `workflow/verification/` | Keep current planning graph while adding explicit graphs per agent. |
-| `planning_agent_core/planning_agent_core/adapters/openproject.py` | `adapters/openproject/` | Merge with trigger client behind an OpenProject port. |
+| `planning_agent_core/planning_agent_core/adapters/openproject.py` | `adapters/openproject/` | Active async adapter now uses the OpenProject port shape and outbound idempotency store; split package later if it grows. |
 | `planning_agent_core/planning_agent_core/adapters/neo4j_store.py` | `adapters/graph_store/neo4j.py` | Wrap behind graph-store port. |
 | `planning_agent_core/planning_agent_core/adapters/weaviate_store.py` | `adapters/vector_store/weaviate.py` | Wrap behind vector-store port. |
 | `planning_agent_core/planning_agent_core/llm.py` | `adapters/llm/openai_compatible.py` | Wrap behind a structured-generation port. |
 | `infra/agent_trigger/app/storage.py` | `adapters/persistence/webhook_inbox.py` | Wrap first, then migrate to async SQLAlchemy and Alembic. |
 | `infra/agent_trigger/app/event_parser.py` | `domain/events.py` plus `application/event_classification.py` | Convert to typed event envelopes and deterministic classification. |
-| `infra/agent_trigger/app/openproject_client.py` | `adapters/openproject/` | Merge with async OpenProject adapter. |
+| `infra/agent_trigger/app/openproject_client.py` | `adapters/openproject/` | Legacy reference only after trigger worker delegation; remove after unified adapter covers all remaining OpenProject behavior. |
 | `infra/agent_trigger/app/worker.py` | `workers/event_worker.py` | Queue/lease compatibility remains here; event orchestration now delegates to `planning_agent_core`. |
 | `infra/postgres/init/01-agent-schema.sql` | Alembic migrations | Convert schema to migrations; stop relying on init SQL for app-owned tables. |
 | `src/parser/` | `adapters/repository_analysis/` | Wrap behind repository-analysis port after path containment policy exists. |
