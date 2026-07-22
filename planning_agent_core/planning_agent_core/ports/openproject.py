@@ -27,6 +27,17 @@ class OpenProjectOperationClaim:
     error_message: str | None = None
 
 
+@dataclass(frozen=True)
+class OpenProjectArtifactMapping:
+    artifact_id: UUID
+    project_id: UUID
+    artifact_type: str
+    external_id: str
+    external_url: str | None = None
+    external_payload: dict[str, Any] | None = None
+    node_identity_id: UUID | None = None
+
+
 class OpenProjectOutboundStorePort(Protocol):
     async def claim_operation(
         self,
@@ -55,6 +66,20 @@ class OpenProjectOutboundStorePort(Protocol):
         idempotency_key: str,
         error_message: str,
     ) -> None:
+        ...
+
+
+class OpenProjectArtifactStorePort(Protocol):
+    async def upsert_mapping(
+        self,
+        *,
+        project_id: UUID,
+        artifact_type: str,
+        external_id: str,
+        external_url: str | None = None,
+        external_payload: dict[str, Any] | None = None,
+        node_identity_id: UUID | None = None,
+    ) -> OpenProjectArtifactMapping:
         ...
 
 
@@ -89,6 +114,8 @@ class OpenProjectPort(Protocol):
         project_id: str,
         external_idempotency_key: str,
         payload: dict[str, Any],
+        local_project_id: UUID | None = None,
+        node_identity_id: UUID | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -98,5 +125,7 @@ class OpenProjectPort(Protocol):
         work_package_id: str,
         external_idempotency_key: str,
         markdown: str,
+        local_project_id: UUID | None = None,
+        node_identity_id: UUID | None = None,
     ) -> dict[str, Any]:
         ...

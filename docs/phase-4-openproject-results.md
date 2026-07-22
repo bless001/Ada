@@ -21,7 +21,10 @@ Baseline date: 2026-07-21
 - Added `OpenProjectReconciliationStorePort` and `SqlAlchemyOpenProjectReconciliationStore`.
 - Added deterministic reconciliation summaries for changed subject, description, status, type, and priority fields.
 - Updated the OpenProject adapter to capture work-package payloads and activities before PATCH updates, and work-package payloads before idempotent comments.
+- Added `OpenProjectArtifactMapping`, `OpenProjectArtifactStorePort`, and `SqlAlchemyOpenProjectArtifactStore` for durable OpenProject-to-local mapping upserts.
+- Updated the OpenProject adapter to upsert `ExternalArtifact` rows after project creation, work-package creation, work-package update, comment-time discovery, and duplicate-success replay.
 - Updated the opt-in live PostgreSQL integration test to expect Alembic head `0006_op_reconciliation`.
+- Added an opt-in live PostgreSQL integration assertion for idempotent OpenProject artifact upserts.
 
 ## Runtime Compatibility Notes
 
@@ -35,6 +38,8 @@ Baseline date: 2026-07-21
 - Reconciliation capture is opt-in through `OpenProjectReconciliationStorePort`; adapter writes remain a no-op for snapshots unless a store is supplied.
 - Snapshot capture happens after an outbound idempotency claim is accepted and before the OpenProject mutation is issued.
 - Reconciliation summaries are metadata only; the complete pre-update OpenProject payload remains the source of truth for preserving human edits.
+- Artifact mapping capture is opt-in through `OpenProjectArtifactStorePort`; callers must provide a local project ID so OpenProject IDs can route future webhooks back to local projects.
+- Work-package update paths first record the discovered pre-update work package mapping, then refresh the mapping again after the PATCH succeeds.
 
 ## Verification
 
@@ -48,7 +53,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-28 passed in 0.48s
+33 passed in 0.39s
 ```
 
 Full suite command:
@@ -61,7 +66,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-70 passed, 3 skipped, 4 warnings in 1.27s
+75 passed, 4 skipped, 4 warnings in 1.04s
 ```
 
 Live PostgreSQL command:
@@ -77,7 +82,7 @@ docker rm -f ada-phase4-pg-$PID
 Result:
 
 ```text
-3 passed in 2.04s
+4 passed in 2.85s
 ```
 
 Alembic history:
@@ -93,6 +98,5 @@ Alembic history:
 
 ## Remaining Phase 4 Work
 
-- Upsert `ExternalArtifact` mappings as projection workflows create or discover OpenProject work packages.
 - Add approval records and explicit resume logic for planning and task-completion approvals.
 - Update OpenProject provisioning for idempotent discovery of types, statuses, custom fields, webhooks, permissions, and sample binding.

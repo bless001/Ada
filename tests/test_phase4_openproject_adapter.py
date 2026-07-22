@@ -20,8 +20,12 @@ from planning_agent_core.application.openproject_feedback import (
 from planning_agent_core.application.project_orchestrator import should_resume_planning
 from planning_agent_core.domain.events import EventEnvelope
 from planning_agent_core.models import (
+    ExternalArtifact,
     OpenProjectOutboundOperation,
     OpenProjectReconciliationSnapshot,
+)
+from planning_agent_core.persistence.openproject_artifacts import (
+    SqlAlchemyOpenProjectArtifactStore,
 )
 from planning_agent_core.persistence.openproject_outbox import (
     SqlAlchemyOpenProjectOutboundStore,
@@ -30,6 +34,7 @@ from planning_agent_core.persistence.openproject_reconciliation import (
     SqlAlchemyOpenProjectReconciliationStore,
 )
 from planning_agent_core.ports.openproject import (
+    OpenProjectArtifactMapping,
     OpenProjectOperationClaim,
     OpenProjectOperationStatus,
     OpenProjectOperationType,
@@ -71,6 +76,26 @@ def test_openproject_reconciliation_snapshot_model_preserves_pre_update_state():
     assert "before_activities_payload" in columns
     assert "agent_payload" in columns
     assert "detected_human_edits" in columns
+
+
+def test_external_artifact_model_tracks_openproject_projection_mappings():
+    assert ExternalArtifact.__tablename__ == "external_artifacts"
+
+    columns = ExternalArtifact.__table__.columns
+    assert "project_id" in columns
+    assert "node_identity_id" in columns
+    assert "system_name" in columns
+    assert "artifact_type" in columns
+    assert "external_id" in columns
+    assert "external_url" in columns
+    assert "external_payload" in columns
+
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in ExternalArtifact.__table__.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("system_name", "artifact_type", "external_id") in unique_columns
 
 
 class FakeSession:
@@ -120,6 +145,37 @@ async def test_openproject_outbound_store_claims_new_operation_with_conflict_sql
     assert "ON CONFLICT (idempotency_key) DO NOTHING" in compiled
     assert claim.should_execute is True
     assert claim.status == OpenProjectOperationStatus.PENDING
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_openproject_artifact_store_upserts_mapping_with_conflict_update():
+    artifact_id = uuid4()
+    local_project_id = uuid4()
+    node_identity_id = uuid4()
+    session = FakeSession([artifact_id])
+    store = SqlAlchemyOpenProjectArtifactStore(session)
+
+    mapping = await store.upsert_mapping(
+        project_id=local_project_id,
+        node_identity_id=node_identity_id,
+        artifact_type="work_package",
+        external_id="34",
+        external_url="/api/v3/work_packages/34",
+        external_payload={"id": 34, "subject": "Build thing"},
+    )
+
+    compiled = str(session.statements[0].compile(dialect=postgresql.dialect()))
+    assert "ON CONFLICT (system_name, artifact_type, external_id) DO UPDATE" in compiled
+    assert mapping == OpenProjectArtifactMapping(
+        artifact_id=artifact_id,
+        project_id=local_project_id,
+        node_identity_id=node_identity_id,
+        artifact_type="work_package",
+        external_id="34",
+        external_url="/api/v3/work_packages/34",
+        external_payload={"id": 34, "subject": "Build thing"},
+    )
     assert session.commits == 1
 
 
@@ -371,6 +427,24 @@ class FakeReconciliationStore:
         self.snapshot_calls.append(kwargs)
 
 
+class FakeArtifactStore:
+    def __init__(self):
+        self.mapping_calls: list[dict[str, Any]] = []
+
+    async def upsert_mapping(self, **kwargs):
+        artifact_id = uuid4()
+        self.mapping_calls.append({"artifact_id": artifact_id, **kwargs})
+        return OpenProjectArtifactMapping(
+            artifact_id=artifact_id,
+            project_id=kwargs["project_id"],
+            node_identity_id=kwargs.get("node_identity_id"),
+            artifact_type=kwargs["artifact_type"],
+            external_id=kwargs["external_id"],
+            external_url=kwargs.get("external_url"),
+            external_payload=kwargs.get("external_payload"),
+        )
+
+
 class FakeResponse:
     def __init__(self, payload: dict[str, Any], error: Exception | None = None):
         self.payload = payload
@@ -512,7 +586,129 @@ async def test_openproject_adapter_create_work_package_is_claimed_before_post():
 
 
 @pytest.mark.asyncio
+async def test_openproject_adapter_upserts_project_mapping_after_create_project():
+    local_project_id = uuid4()
+    artifact_store = FakeArtifactStore()
+    response_payload = {
+        "id": 12,
+        "identifier": "ada-core",
+        "_links": {"self": {"href": "/api/v3/projects/12"}},
+    }
+    http_client = FakeHttpClient([FakeResponse(response_payload)])
+    client = OpenProjectClient(
+        artifact_store=artifact_store,
+        http_client=http_client,
+    )
+
+    result = await client.create_project(
+        "ada-core",
+        "Ada Core",
+        "Planning project",
+        local_project_id=local_project_id,
+    )
+
+    assert result == response_payload
+    assert artifact_store.mapping_calls == [
+        {
+            "artifact_id": artifact_store.mapping_calls[0]["artifact_id"],
+            "project_id": local_project_id,
+            "node_identity_id": None,
+            "artifact_type": "project",
+            "external_id": "12",
+            "external_url": "/api/v3/projects/12",
+            "external_payload": response_payload,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openproject_adapter_upserts_mapping_after_work_package_create():
+    local_project_id = uuid4()
+    node_identity_id = uuid4()
+    store = FakeOutboundStore(
+        OpenProjectOperationClaim(
+            idempotency_key="op:wp:1",
+            operation_type=OpenProjectOperationType.CREATE_OR_UPDATE_WORK_PACKAGE,
+            status=OpenProjectOperationStatus.PENDING,
+            should_execute=True,
+        )
+    )
+    artifact_store = FakeArtifactStore()
+    response_payload = {
+        "id": 77,
+        "subject": "Build thing",
+        "_links": {"self": {"href": "/api/v3/work_packages/77"}},
+    }
+    http_client = FakeHttpClient([FakeResponse(response_payload)])
+    client = OpenProjectClient(
+        artifact_store=artifact_store,
+        outbound_store=store,
+        http_client=http_client,
+    )
+
+    result = await client.create_or_update_work_package(
+        project_id="12",
+        external_idempotency_key="op:wp:1",
+        payload={"subject": "Build thing"},
+        local_project_id=local_project_id,
+        node_identity_id=node_identity_id,
+    )
+
+    assert result == response_payload
+    assert store.claim_calls[0]["project_id"] == local_project_id
+    assert artifact_store.mapping_calls[0] == {
+        "artifact_id": artifact_store.mapping_calls[0]["artifact_id"],
+        "project_id": local_project_id,
+        "node_identity_id": node_identity_id,
+        "artifact_type": "work_package",
+        "external_id": "77",
+        "external_url": "/api/v3/work_packages/77",
+        "external_payload": response_payload,
+    }
+
+
+@pytest.mark.asyncio
+async def test_openproject_adapter_refreshes_mapping_for_duplicate_success_response():
+    local_project_id = uuid4()
+    response_payload = {
+        "id": 77,
+        "subject": "Build thing",
+        "_links": {"self": {"href": "/api/v3/work_packages/77"}},
+    }
+    store = FakeOutboundStore(
+        OpenProjectOperationClaim(
+            idempotency_key="op:wp:1",
+            operation_type=OpenProjectOperationType.CREATE_OR_UPDATE_WORK_PACKAGE,
+            status=OpenProjectOperationStatus.SUCCEEDED,
+            should_execute=False,
+            response_payload=response_payload,
+        )
+    )
+    artifact_store = FakeArtifactStore()
+    http_client = FakeHttpClient([])
+    client = OpenProjectClient(
+        artifact_store=artifact_store,
+        outbound_store=store,
+        http_client=http_client,
+    )
+
+    result = await client.create_or_update_work_package(
+        project_id="12",
+        external_idempotency_key="op:wp:1",
+        payload={"subject": "Build thing"},
+        local_project_id=local_project_id,
+    )
+
+    assert result == response_payload
+    assert http_client.requests == []
+    assert artifact_store.mapping_calls[0]["project_id"] == local_project_id
+    assert artifact_store.mapping_calls[0]["external_id"] == "77"
+
+
+@pytest.mark.asyncio
 async def test_openproject_adapter_records_reconciliation_snapshot_before_update():
+    local_project_id = uuid4()
+    node_identity_id = uuid4()
     store = FakeOutboundStore(
         OpenProjectOperationClaim(
             idempotency_key="op:wp:34",
@@ -521,12 +717,14 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_update
             should_execute=True,
         )
     )
+    artifact_store = FakeArtifactStore()
     reconciliation_store = FakeReconciliationStore()
     before_payload = {
         "id": 34,
         "subject": "Human subject",
         "description": {"raw": "Human description"},
         "_links": {
+            "self": {"href": "/api/v3/work_packages/34"},
             "status": {"title": "Ready"},
             "type": {"title": "Task"},
         },
@@ -541,14 +739,20 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_update
             "type": {"title": "Task"},
         },
     }
+    response_payload = {
+        "id": 34,
+        "subject": "Agent subject",
+        "_links": {"self": {"href": "/api/v3/work_packages/34"}},
+    }
     http_client = FakeHttpClient(
         [
             FakeResponse(before_payload),
             FakeResponse(activities_payload),
-            FakeResponse({"id": 34, "subject": "Agent subject"}),
+            FakeResponse(response_payload),
         ]
     )
     client = OpenProjectClient(
+        artifact_store=artifact_store,
         outbound_store=store,
         reconciliation_store=reconciliation_store,
         http_client=http_client,
@@ -558,9 +762,11 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_update
         project_id="12",
         external_idempotency_key="op:wp:34",
         payload=agent_payload,
+        local_project_id=local_project_id,
+        node_identity_id=node_identity_id,
     )
 
-    assert result == {"id": 34, "subject": "Agent subject"}
+    assert result == response_payload
     assert [request["method"] for request in http_client.requests] == [
         "GET",
         "GET",
@@ -571,6 +777,14 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_update
         "/work_packages/34/activities",
         "/work_packages/34",
     ]
+    assert artifact_store.mapping_calls[0]["project_id"] == local_project_id
+    assert artifact_store.mapping_calls[0]["node_identity_id"] == node_identity_id
+    assert artifact_store.mapping_calls[0]["external_payload"] == before_payload
+    assert artifact_store.mapping_calls[1]["external_payload"] == response_payload
+    assert reconciliation_store.snapshot_calls[0]["project_id"] == local_project_id
+    assert reconciliation_store.snapshot_calls[0]["artifact_id"] == (
+        artifact_store.mapping_calls[0]["artifact_id"]
+    )
     assert reconciliation_store.snapshot_calls[0]["before_payload"] == before_payload
     assert reconciliation_store.snapshot_calls[0]["before_activities_payload"] == (
         activities_payload
@@ -597,6 +811,8 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_update
 
 @pytest.mark.asyncio
 async def test_openproject_adapter_records_reconciliation_snapshot_before_comment():
+    local_project_id = uuid4()
+    node_identity_id = uuid4()
     store = FakeOutboundStore(
         OpenProjectOperationClaim(
             idempotency_key="op:comment:34",
@@ -605,9 +821,13 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_commen
             should_execute=True,
         )
     )
+    artifact_store = FakeArtifactStore()
     reconciliation_store = FakeReconciliationStore()
     before_payload = {
         "_links": {
+            "self": {
+                "href": "/api/v3/work_packages/34",
+            },
             "addComment": {
                 "href": "/api/v3/work_packages/34/activities",
             }
@@ -620,6 +840,7 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_commen
         ]
     )
     client = OpenProjectClient(
+        artifact_store=artifact_store,
         outbound_store=store,
         reconciliation_store=reconciliation_store,
         http_client=http_client,
@@ -629,13 +850,23 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_commen
         work_package_id="34",
         external_idempotency_key="op:comment:34",
         markdown="Agent update",
+        local_project_id=local_project_id,
+        node_identity_id=node_identity_id,
     )
 
+    assert store.claim_calls[0]["project_id"] == local_project_id
+    assert artifact_store.mapping_calls[0]["project_id"] == local_project_id
+    assert artifact_store.mapping_calls[0]["node_identity_id"] == node_identity_id
+    assert artifact_store.mapping_calls[0]["external_id"] == "34"
     assert reconciliation_store.snapshot_calls[0]["operation_type"] == (
         OpenProjectOperationType.ADD_COMMENT
     )
     assert reconciliation_store.snapshot_calls[0]["target_external_id"] == "34"
     assert reconciliation_store.snapshot_calls[0]["before_payload"] == before_payload
+    assert reconciliation_store.snapshot_calls[0]["project_id"] == local_project_id
+    assert reconciliation_store.snapshot_calls[0]["artifact_id"] == (
+        artifact_store.mapping_calls[0]["artifact_id"]
+    )
     assert has_openproject_idempotency_marker(
         reconciliation_store.snapshot_calls[0]["agent_payload"]["comment"]["raw"],
         "op:comment:34",

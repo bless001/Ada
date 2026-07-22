@@ -12,7 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from planning_agent_core.domain.events import EventEnvelope
-from planning_agent_core.models import AgentJob, WebhookEvent
+from planning_agent_core.models import AgentJob, ExternalArtifact, Project, WebhookEvent
+from planning_agent_core.persistence.openproject_artifacts import (
+    SqlAlchemyOpenProjectArtifactStore,
+)
 from planning_agent_core.persistence.event_inbox import SqlAlchemyEventInbox
 
 
@@ -135,6 +138,50 @@ async def test_phase3_event_inbox_duplicate_delivery_creates_one_job(
                 select(AgentJob).where(AgentJob.event_id == event_count.id)
             )
             assert len(list(jobs)) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase4_openproject_artifact_mapping_upsert_is_idempotent(
+    migrated_postgres_url: str,
+):
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    external_id = f"wp-{uuid4()}"
+
+    try:
+        async with session_factory() as session:
+            project = Project(
+                project_key=f"phase4-artifacts-{uuid4()}",
+                name="Phase 4 Artifact Mapping",
+            )
+            session.add(project)
+            await session.commit()
+            await session.refresh(project)
+
+            store = SqlAlchemyOpenProjectArtifactStore(session)
+            first = await store.upsert_mapping(
+                project_id=project.id,
+                artifact_type="work_package",
+                external_id=external_id,
+                external_url=f"/api/v3/work_packages/{external_id}",
+                external_payload={"subject": "First"},
+            )
+            second = await store.upsert_mapping(
+                project_id=project.id,
+                artifact_type="work_package",
+                external_id=external_id,
+                external_url=f"/api/v3/work_packages/{external_id}",
+                external_payload={"subject": "Second"},
+            )
+
+            assert second.artifact_id == first.artifact_id
+            artifact = await session.scalar(
+                select(ExternalArtifact).where(ExternalArtifact.id == first.artifact_id)
+            )
+            assert artifact is not None
+            assert artifact.external_payload == {"subject": "Second"}
     finally:
         await engine.dispose()
 

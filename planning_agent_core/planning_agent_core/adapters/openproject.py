@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import UUID
 
 import httpx
 
@@ -17,6 +18,8 @@ from planning_agent_core.application.openproject_reconciliation import (
 )
 from planning_agent_core.config import settings
 from planning_agent_core.ports.openproject import (
+    OpenProjectArtifactMapping,
+    OpenProjectArtifactStorePort,
     OpenProjectOperationClaim,
     OpenProjectOperationStatus,
     OpenProjectOperationType,
@@ -61,6 +64,7 @@ class OpenProjectClient:
     def __init__(
         self,
         *,
+        artifact_store: OpenProjectArtifactStorePort | None = None,
         outbound_store: OpenProjectOutboundStorePort | None = None,
         reconciliation_store: OpenProjectReconciliationStorePort | None = None,
         http_client: Any | None = None,
@@ -69,6 +73,7 @@ class OpenProjectClient:
         api_token_file: str | None = None,
         request_timeout_seconds: int | None = None,
     ) -> None:
+        self.artifact_store = artifact_store
         self.outbound_store = outbound_store
         self.reconciliation_store = reconciliation_store
         self._owns_client = http_client is None
@@ -99,8 +104,15 @@ class OpenProjectClient:
         response.raise_for_status()
         return response.json() if response.content else {}
 
-    async def create_project(self, identifier: str, name: str, description: str) -> dict[str, Any]:
-        return await self.request(
+    async def create_project(
+        self,
+        identifier: str,
+        name: str,
+        description: str,
+        *,
+        local_project_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        response = await self.request(
             "POST",
             "/projects",
             json={
@@ -109,6 +121,13 @@ class OpenProjectClient:
                 "description": {"format": "markdown", "raw": description},
             },
         )
+        await self._record_openproject_artifact_mapping(
+            local_project_id=local_project_id,
+            artifact_type="project",
+            payload=response,
+            fallback_external_id=identifier,
+        )
+        return response
 
     async def list_types(self) -> dict[str, str]:
         data = await self.request("GET", "/types")
@@ -141,6 +160,8 @@ class OpenProjectClient:
         project_id: str,
         external_idempotency_key: str,
         payload: dict[str, Any],
+        local_project_id: UUID | None = None,
+        node_identity_id: UUID | None = None,
     ) -> dict[str, Any]:
         store = self._require_outbound_store()
         target_external_id = _work_package_id_from_payload(payload)
@@ -148,15 +169,29 @@ class OpenProjectClient:
             idempotency_key=external_idempotency_key,
             operation_type=OpenProjectOperationType.CREATE_OR_UPDATE_WORK_PACKAGE,
             request_payload={"project_id": project_id, "payload": payload},
+            project_id=local_project_id,
             target_artifact_type="work_package",
             target_external_id=target_external_id,
         )
         if not claim.should_execute:
+            if claim.response_payload is not None:
+                await self._record_work_package_mapping(
+                    local_project_id=local_project_id,
+                    node_identity_id=node_identity_id,
+                    payload=claim.response_payload,
+                    fallback_external_id=target_external_id,
+                )
             return _skipped_response(claim)
 
         try:
             if target_external_id:
                 before_payload = await self.get_work_package(target_external_id)
+                artifact_mapping = await self._record_work_package_mapping(
+                    local_project_id=local_project_id,
+                    node_identity_id=node_identity_id,
+                    payload=before_payload,
+                    fallback_external_id=target_external_id,
+                )
                 before_activities_payload = await self.list_work_package_activities(
                     target_external_id
                 )
@@ -168,6 +203,10 @@ class OpenProjectClient:
                     before_payload=before_payload,
                     before_activities_payload=before_activities_payload,
                     agent_payload=payload,
+                    project_id=local_project_id,
+                    artifact_id=(
+                        artifact_mapping.artifact_id if artifact_mapping else None
+                    ),
                 )
                 response = await self.request(
                     "PATCH",
@@ -191,6 +230,12 @@ class OpenProjectClient:
             idempotency_key=external_idempotency_key,
             response_payload=response,
         )
+        await self._record_work_package_mapping(
+            local_project_id=local_project_id,
+            node_identity_id=node_identity_id,
+            payload=response,
+            fallback_external_id=target_external_id,
+        )
         return response
 
     async def add_comment(
@@ -199,6 +244,8 @@ class OpenProjectClient:
         work_package_id: str,
         external_idempotency_key: str,
         markdown: str,
+        local_project_id: UUID | None = None,
+        node_identity_id: UUID | None = None,
     ) -> dict[str, Any]:
         store = self._require_outbound_store()
         marked_markdown = markdown_with_idempotency_marker(
@@ -212,6 +259,7 @@ class OpenProjectClient:
                 "work_package_id": work_package_id,
                 "markdown": marked_markdown,
             },
+            project_id=local_project_id,
             target_artifact_type="work_package",
             target_external_id=work_package_id,
         )
@@ -220,6 +268,12 @@ class OpenProjectClient:
 
         try:
             work_package = await self.get_work_package(work_package_id)
+            artifact_mapping = await self._record_work_package_mapping(
+                local_project_id=local_project_id,
+                node_identity_id=node_identity_id,
+                payload=work_package,
+                fallback_external_id=work_package_id,
+            )
             await self._record_reconciliation_snapshot(
                 outbound_idempotency_key=external_idempotency_key,
                 operation_type=OpenProjectOperationType.ADD_COMMENT,
@@ -231,6 +285,10 @@ class OpenProjectClient:
                         "raw": marked_markdown,
                     }
                 },
+                project_id=local_project_id,
+                artifact_id=(
+                    artifact_mapping.artifact_id if artifact_mapping else None
+                ),
             )
             add_comment_href = (
                 work_package.get("_links", {})
@@ -279,6 +337,8 @@ class OpenProjectClient:
         before_payload: dict[str, Any],
         agent_payload: dict[str, Any],
         before_activities_payload: dict[str, Any] | None = None,
+        project_id: UUID | None = None,
+        artifact_id: UUID | None = None,
     ) -> None:
         if self.reconciliation_store is None:
             return
@@ -290,10 +350,58 @@ class OpenProjectClient:
             before_payload=before_payload,
             before_activities_payload=before_activities_payload,
             agent_payload=agent_payload,
+            project_id=project_id,
+            artifact_id=artifact_id,
             detected_human_edits=detect_human_edit_summary(
                 before_payload=before_payload,
                 agent_payload=agent_payload,
             ),
+        )
+
+    async def _record_work_package_mapping(
+        self,
+        *,
+        local_project_id: UUID | None,
+        payload: dict[str, Any],
+        node_identity_id: UUID | None = None,
+        fallback_external_id: str | None = None,
+    ) -> OpenProjectArtifactMapping | None:
+        return await self._record_openproject_artifact_mapping(
+            local_project_id=local_project_id,
+            artifact_type="work_package",
+            payload=payload,
+            node_identity_id=node_identity_id,
+            fallback_external_id=fallback_external_id,
+        )
+
+    async def _record_openproject_artifact_mapping(
+        self,
+        *,
+        local_project_id: UUID | None,
+        artifact_type: str,
+        payload: dict[str, Any],
+        node_identity_id: UUID | None = None,
+        fallback_external_id: str | None = None,
+    ) -> OpenProjectArtifactMapping | None:
+        if self.artifact_store is None or local_project_id is None:
+            return None
+
+        external_id = _external_id_from_payload(
+            payload,
+            fallback_external_id=fallback_external_id,
+        )
+        if external_id is None:
+            raise RuntimeError(
+                f"OpenProject {artifact_type} response did not include an external id"
+            )
+
+        return await self.artifact_store.upsert_mapping(
+            project_id=local_project_id,
+            node_identity_id=node_identity_id,
+            artifact_type=artifact_type,
+            external_id=external_id,
+            external_url=_self_href_from_payload(payload),
+            external_payload=payload,
         )
 
 
@@ -302,6 +410,38 @@ def _work_package_id_from_payload(payload: dict[str, Any]) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _external_id_from_payload(
+    payload: dict[str, Any],
+    *,
+    fallback_external_id: str | None = None,
+) -> str | None:
+    value = payload.get("id") or payload.get("work_package_id")
+    if value is not None:
+        return str(value)
+
+    self_href = _self_href_from_payload(payload)
+    if self_href:
+        parsed_id = _last_path_segment(self_href)
+        if parsed_id:
+            return parsed_id
+
+    return fallback_external_id
+
+
+def _self_href_from_payload(payload: dict[str, Any]) -> str | None:
+    self_link = payload.get("_links", {}).get("self")
+    if isinstance(self_link, dict):
+        href = self_link.get("href")
+        return str(href) if href is not None else None
+    return None
+
+
+def _last_path_segment(href: str) -> str | None:
+    path = urlparse(href).path
+    segment = path.rstrip("/").rsplit("/", 1)[-1]
+    return segment or None
 
 
 def _hal_elements_by_name(data: dict[str, Any]) -> dict[str, str]:
