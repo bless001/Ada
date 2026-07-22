@@ -337,6 +337,7 @@ services:
       - OPENPROJECT_BASE_URL=http://openproject
       - OPENPROJECT_API_TOKEN_FILE=/agent-secrets/openproject_api_token
       - OPENPROJECT_PROVISIONING_REPORT_FILE=/agent-secrets/openproject_provisioning.json
+      - REPOSITORY_MOUNT_ROOT=/workspace/repositories
       - APP_ENV=development
       - LLM_BASE_URL=http://localhost:8080/v1
       - LLM_MODEL=local-coding-model
@@ -361,6 +362,7 @@ services:
         condition: service_started
     volumes:
       - openproject_agent_secrets:/agent-secrets:ro
+      - ./infra/workspace/repositories:/workspace/repositories
     networks:
       - ca_net
 

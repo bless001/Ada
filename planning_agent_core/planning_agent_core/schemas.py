@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from planning_agent_core.enums import InputMode, PlanNodeKind
+from planning_agent_core.enums import InputMode, PlanNodeKind, RepositoryAccessMode
 
 
 class ProjectCreate(BaseModel):
@@ -156,3 +156,63 @@ class ContextCapsuleView(BaseModel):
     capsule_type: str
     content: str
     token_estimate: int | None
+
+
+class RepositoryBindingCreate(BaseModel):
+    repository_key: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,79}$")
+    mount_path: str = Field(min_length=1)
+    access_mode: RepositoryAccessMode = RepositoryAccessMode.READ_ONLY
+    write_allowlist: list[str] = Field(default_factory=list)
+    denylist: list[str] | None = None
+    command_allowlist: list[str] = Field(default_factory=list)
+
+
+class RepositoryBindingView(BaseModel):
+    repository_key: str
+    mount_path: str
+    access_mode: RepositoryAccessMode
+    write_allowlist: list[str]
+    denylist: list[str]
+    command_allowlist: list[str]
+
+
+class RepositoryIndexView(BaseModel):
+    project_id: UUID
+    project_key: str
+    repository_key: str
+    symbol_count: int
+    relationship_count: int
+    warnings: list[str] = Field(default_factory=list)
+    graph_mutations: int = 0
+    vector_upserts: int = 0
+
+
+class RepositorySnapshotView(BaseModel):
+    repository_key: str
+    commit_sha: str | None
+    branch: str | None
+    dirty: bool
+    status_porcelain: str
+    warning: str | None = None
+
+
+class CodeSymbolView(BaseModel):
+    symbol_key: str
+    repository_key: str
+    relative_path: str
+    name: str
+    kind: str
+    language: str
+    start_line: int | None = None
+    end_line: int | None = None
+    parent_symbol_key: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CodeRelationshipView(BaseModel):
+    repository_key: str
+    source_symbol_key: str
+    relationship_type: str
+    target_symbol_key: str | None = None
+    target_name: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

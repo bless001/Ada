@@ -11,13 +11,21 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from planning_agent_core.domain.enums import ApprovalDecision, ApprovalScope
+from planning_agent_core.domain.enums import (
+    ApprovalDecision,
+    ApprovalScope,
+    RepositoryAccessMode,
+)
 from planning_agent_core.domain.events import EventEnvelope
+from planning_agent_core.domain.repositories import RepositoryBinding
 from planning_agent_core.models import (
     AgentJob,
     ApprovalRecord,
     ExternalArtifact,
     Project,
+    RepositoryBindingRecord,
+    RepositoryRelationshipRecord,
+    RepositorySymbolRecord,
     WebhookEvent,
 )
 from planning_agent_core.persistence.approvals import SqlAlchemyApprovalRecordStore
@@ -25,7 +33,12 @@ from planning_agent_core.persistence.openproject_artifacts import (
     SqlAlchemyOpenProjectArtifactStore,
 )
 from planning_agent_core.persistence.event_inbox import SqlAlchemyEventInbox
+from planning_agent_core.persistence.repository_bindings import (
+    SqlAlchemyRepositoryBindingStore,
+)
+from planning_agent_core.persistence.repository_index import SqlAlchemyRepositoryIndexStore
 from planning_agent_core.ports.approvals import ApprovalRecordInput
+from planning_agent_core.services.repository_analysis_service import RepositoryAnalysisService
 
 
 POSTGRES_URL_ENV = "PHASE3_POSTGRES_DATABASE_URL"
@@ -62,7 +75,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
     with psycopg.connect(_to_psycopg_url(migrated_postgres_url)) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
-            assert cur.fetchone()[0] == "0007_approval_records"
+            assert cur.fetchone()[0] == "0009_repository_index"
 
             cur.execute(
                 """
@@ -76,7 +89,10 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                       'approval_records',
                       'openproject_outbound_operations',
                       'openproject_reconciliation_snapshots',
-                      'pm_context_snapshots'
+                      'pm_context_snapshots',
+                      'repository_bindings',
+                      'repository_relationships',
+                      'repository_symbols'
                   )
                 ORDER BY table_name
                 """
@@ -89,6 +105,9 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                 "openproject_reconciliation_snapshots",
                 "pm_context_snapshots",
                 "pm_webhook_events",
+                "repository_bindings",
+                "repository_relationships",
+                "repository_symbols",
             ]
 
             cur.execute(
@@ -242,6 +261,183 @@ async def test_phase4_approval_record_source_decision_is_idempotent(
                 )
             )
             assert len(list(approvals)) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase5_repository_binding_upsert_is_idempotent(
+    migrated_postgres_url: str,
+):
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    try:
+        async with session_factory() as session:
+            project = Project(
+                project_key=f"phase5-repositories-{uuid4()}",
+                name="Phase 5 Repository Binding",
+            )
+            session.add(project)
+            await session.commit()
+            await session.refresh(project)
+
+            store = SqlAlchemyRepositoryBindingStore(session)
+            first = await store.upsert_binding(
+                project_id=project.id,
+                binding=RepositoryBinding(
+                    repository_key="sample-project",
+                    mount_path="/workspace/repositories/sample_project",
+                    access_mode=RepositoryAccessMode.READ_ONLY,
+                    command_allowlist=("pytest",),
+                ),
+            )
+            second = await store.upsert_binding(
+                project_id=project.id,
+                binding=RepositoryBinding(
+                    repository_key="sample-project",
+                    mount_path="/workspace/repositories/sample_project",
+                    access_mode=RepositoryAccessMode.READ_WRITE,
+                    write_allowlist=("src/**", "tests/**"),
+                    command_allowlist=("pytest", "python"),
+                ),
+            )
+
+            assert first.repository_key == second.repository_key == "sample-project"
+            record = await session.scalar(
+                select(RepositoryBindingRecord).where(
+                    RepositoryBindingRecord.project_id == project.id,
+                    RepositoryBindingRecord.repository_key == "sample-project",
+                )
+            )
+            assert record is not None
+            assert record.access_mode == RepositoryAccessMode.READ_WRITE.value
+            assert record.write_allowlist == ["src/**", "tests/**"]
+
+            loaded = await store.get_binding(
+                project_id=project.id,
+                repository_key="sample-project",
+            )
+            assert loaded == second
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase5_repository_index_replace_is_queryable(
+    migrated_postgres_url: str,
+):
+    from planning_agent_core.adapters.repository_analysis import PythonAstRepositoryAnalyzer
+
+    repo_root = Path(__file__).resolve().parents[1]
+    sample_project = repo_root / "sample_project"
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    try:
+        async with session_factory() as session:
+            project = Project(
+                project_key=f"phase5-index-{uuid4()}",
+                name="Phase 5 Repository Index",
+            )
+            session.add(project)
+            await session.commit()
+            await session.refresh(project)
+
+            index = await PythonAstRepositoryAnalyzer(
+                [
+                    RepositoryBinding(
+                        repository_key="sample-project",
+                        mount_path=str(sample_project),
+                    )
+                ]
+            ).index_repository(repository_key="sample-project")
+
+            store = SqlAlchemyRepositoryIndexStore(session)
+            await store.replace_index(project_id=project.id, index=index)
+            await store.replace_index(project_id=project.id, index=index)
+
+            symbols = await store.list_symbols(
+                project_id=project.id,
+                repository_key="sample-project",
+            )
+            relationships = await store.list_relationships(
+                project_id=project.id,
+                repository_key="sample-project",
+            )
+
+            assert {symbol.name for symbol in symbols} >= {
+                "main.py",
+                "calculate_total",
+                "checkout",
+                "services.payment.PaymentService",
+            }
+            assert any(
+                relationship.relationship_type.value == "calls"
+                and relationship.target_name == "calculate_total"
+                for relationship in relationships
+            )
+
+            symbol_records = await session.scalars(
+                select(RepositorySymbolRecord).where(
+                    RepositorySymbolRecord.project_id == project.id,
+                    RepositorySymbolRecord.repository_key == "sample-project",
+                )
+            )
+            relationship_records = await session.scalars(
+                select(RepositoryRelationshipRecord).where(
+                    RepositoryRelationshipRecord.project_id == project.id,
+                    RepositoryRelationshipRecord.repository_key == "sample-project",
+                )
+            )
+            assert len(list(symbol_records)) == len(index.symbols)
+            assert len(list(relationship_records)) == len(index.relationships)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase5_repository_analysis_service_binds_and_indexes_sample_project(
+    migrated_postgres_url: str,
+):
+    repo_root = Path(__file__).resolve().parents[1]
+    sample_project = repo_root / "sample_project"
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    try:
+        async with session_factory() as session:
+            project = Project(
+                project_key=f"phase5-service-{uuid4()}",
+                name="Phase 5 Repository Service",
+            )
+            session.add(project)
+            await session.commit()
+
+            service = RepositoryAnalysisService(
+                session,
+                repository_mount_root=str(repo_root),
+            )
+            binding = await service.bind_repository(
+                project_key=project.project_key,
+                binding=RepositoryBinding(
+                    repository_key="sample-project",
+                    mount_path=str(sample_project),
+                ),
+            )
+            summary = await service.index_repository(
+                project_key=project.project_key,
+                repository_key=binding.repository_key,
+            )
+            symbols = await service.list_symbols(
+                project_key=project.project_key,
+                repository_key=binding.repository_key,
+            )
+
+            assert summary.symbol_count >= 4
+            assert summary.relationship_count >= 3
+            assert {symbol.name for symbol in symbols} >= {"calculate_total", "checkout"}
+            assert any("LSP analysis is unavailable" in warning for warning in summary.warnings)
     finally:
         await engine.dispose()
 

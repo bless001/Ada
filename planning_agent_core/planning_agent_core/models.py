@@ -26,6 +26,103 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
+class RepositoryBindingRecord(Base):
+    __tablename__ = "repository_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "repository_key",
+            name="uq_repository_bindings_project_key",
+        ),
+        CheckConstraint(
+            "access_mode IN ('READ_ONLY', 'READ_WRITE')",
+            name="ck_repository_bindings_access_mode",
+        ),
+        Index("idx_repository_bindings_project", "project_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    repository_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    mount_path: Mapped[str] = mapped_column(Text, nullable=False)
+    access_mode: Mapped[str] = mapped_column(String(40), nullable=False, default="READ_ONLY")
+    write_allowlist: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    denylist: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    command_allowlist: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    binding_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
+class RepositorySymbolRecord(Base):
+    __tablename__ = "repository_symbols"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "repository_key",
+            "symbol_key",
+            name="uq_repository_symbols_project_symbol",
+        ),
+        Index(
+            "idx_repository_symbols_project_repository",
+            "project_id",
+            "repository_key",
+            "kind",
+        ),
+        Index("idx_repository_symbols_name", "repository_key", "name"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    repository_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    symbol_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    language: Mapped[str] = mapped_column(String(40), nullable=False)
+    start_line: Mapped[int | None] = mapped_column(Integer)
+    end_line: Mapped[int | None] = mapped_column(Integer)
+    parent_symbol_key: Mapped[str | None] = mapped_column(String(500))
+    symbol_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class RepositoryRelationshipRecord(Base):
+    __tablename__ = "repository_relationships"
+    __table_args__ = (
+        Index(
+            "idx_repository_relationships_project_repository",
+            "project_id",
+            "repository_key",
+            "relationship_type",
+        ),
+        Index("idx_repository_relationships_source", "repository_key", "source_symbol_key"),
+        Index("idx_repository_relationships_target", "repository_key", "target_symbol_key"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    repository_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_symbol_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    target_symbol_key: Mapped[str | None] = mapped_column(String(500))
+    target_name: Mapped[str | None] = mapped_column(Text)
+    relationship_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    relationship_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class PlanningSession(Base):
     __tablename__ = "planning_sessions"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)

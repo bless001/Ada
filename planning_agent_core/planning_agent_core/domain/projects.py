@@ -2,13 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from planning_agent_core.domain.enums import ProjectStatus, RepositoryAccessMode
-
-
-class RepositoryBinding(BaseModel):
-    repository_key: str
-    mount_path: str
-    access_mode: RepositoryAccessMode = RepositoryAccessMode.READ_ONLY
+from planning_agent_core.domain.enums import ProjectStatus
+from planning_agent_core.domain.repositories import RepositoryBinding
 
 
 class Project(BaseModel):

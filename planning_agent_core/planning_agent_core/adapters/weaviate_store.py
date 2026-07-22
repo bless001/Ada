@@ -1,7 +1,14 @@
+from __future__ import annotations
+
+from typing import Any
+
 import weaviate
 from weaviate.classes.config import Configure, DataType, Property
 
 from planning_agent_core.config import settings
+from planning_agent_core.services.repository_projection_service import (
+    REPOSITORY_CONTEXT_COLLECTION,
+)
 
 
 class WeaviateSchemaStore:
@@ -19,10 +26,11 @@ class WeaviateSchemaStore:
             grpc_secure=settings.weaviate_secure,
         )
 
-    def ensure_schema(self) -> None:
+    async def ensure_schema(self) -> None:
         self._ensure_project_memory()
         self._ensure_plan_node_context()
         self._ensure_context_capsule()
+        self._ensure_repository_context()
 
     def _ensure_project_memory(self) -> None:
         if self.client.collections.exists(self.PROJECT_MEMORY):
@@ -71,6 +79,57 @@ class WeaviateSchemaStore:
                 Property(name="content", data_type=DataType.TEXT),
             ],
         )
+
+    def _ensure_repository_context(self) -> None:
+        if self.client.collections.exists(REPOSITORY_CONTEXT_COLLECTION):
+            return
+        self.client.collections.create(
+            name=REPOSITORY_CONTEXT_COLLECTION,
+            vector_config=Configure.Vectors.self_provided(),
+            properties=[
+                Property(name="project_id", data_type=DataType.TEXT),
+                Property(name="repository_key", data_type=DataType.TEXT),
+                Property(name="relative_path", data_type=DataType.TEXT),
+                Property(name="name", data_type=DataType.TEXT),
+                Property(name="kind", data_type=DataType.TEXT),
+                Property(name="language", data_type=DataType.TEXT),
+                Property(name="content", data_type=DataType.TEXT),
+            ],
+        )
+
+    async def upsert_text(
+        self,
+        *,
+        collection: str,
+        object_id: str,
+        text: str,
+        properties: dict[str, Any],
+        vector: list[float] | None = None,
+    ) -> None:
+        target = self.client.collections.get(collection)
+        payload = {**properties, "content": text}
+        if target.data.exists(uuid=object_id):
+            target.data.update(uuid=object_id, properties=payload, vector=vector)
+        else:
+            target.data.insert(properties=payload, uuid=object_id, vector=vector)
+
+    async def search(
+        self,
+        *,
+        collection: str,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        target = self.client.collections.get(collection)
+        response = target.query.bm25(query=query, limit=limit)
+        return [
+            {
+                "id": str(item.uuid),
+                "properties": dict(item.properties),
+                "score": getattr(getattr(item, "metadata", None), "score", None),
+            }
+            for item in response.objects
+        ]
 
     def close(self) -> None:
         self.client.close()

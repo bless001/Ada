@@ -1,10 +1,10 @@
 {
   "name": "openproject_projection",
-  "version": "0.1.0",
-  "description": "Projects epics, stories, tasks, dependencies, descriptions, and status into OpenProject.",
-  "input_schema": null,
-  "output_schema": null,
+  "version": "1.0.0",
+  "description": "Builds idempotent OpenProject projection operation specs for epics, stories, and tasks.",
+  "input_schema": "planning_agent_core.skills.openproject_projection.OpenProjectProjectionInput",
+  "output_schema": "planning_agent_core.skills.openproject_projection.OpenProjectProjectionOutput",
   "side_effects": false,
-  "required_tools": ["openproject"],
-  "status": "planned"
+  "required_tools": [],
+  "status": "implemented"
 }

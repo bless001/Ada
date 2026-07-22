@@ -10,6 +10,7 @@ from planning_agent_core.api.events import router as events_router
 from planning_agent_core.api.planning import router as planning_router
 from planning_agent_core.api.projects import router as projects_router
 from planning_agent_core.api.provisioning import router as provisioning_router
+from planning_agent_core.api.repositories import router as repositories_router
 from planning_agent_core.db import create_schema
 from planning_agent_core.workflow.checkpointer import get_checkpoint_database_url
 from planning_agent_core.workflow.store import build_store
@@ -42,6 +43,7 @@ app.include_router(planning_router)
 app.include_router(provisioning_router)
 app.include_router(context_router)
 app.include_router(events_router)
+app.include_router(repositories_router)
 
 
 @app.get("/health")

@@ -20,6 +20,8 @@ DEFAULT_AGENT_DEFINITIONS: tuple[AgentDefinition, ...] = (
             "document_ingestion",
             "requirement_extraction",
             "ambiguity_assessment",
+            "repository_inspection",
+            "implementation_status_classification",
             "planning_decomposition",
             "plan_validation",
             "openproject_projection",

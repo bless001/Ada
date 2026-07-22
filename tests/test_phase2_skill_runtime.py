@@ -38,7 +38,7 @@ def test_builtin_skill_manifests_cover_required_planning_skills():
     }.issubset(manifests)
     assert manifests["ambiguity_assessment"].status == "implemented"
     assert manifests["planning_decomposition"].status == "implemented"
-    assert manifests["requirement_extraction"].status == "planned"
+    assert manifests["requirement_extraction"].status == "implemented"
 
 
 def test_duplicate_skill_manifests_fail_clearly(tmp_path: Path):
