@@ -11,12 +11,21 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from planning_agent_core.domain.enums import ApprovalDecision, ApprovalScope
 from planning_agent_core.domain.events import EventEnvelope
-from planning_agent_core.models import AgentJob, ExternalArtifact, Project, WebhookEvent
+from planning_agent_core.models import (
+    AgentJob,
+    ApprovalRecord,
+    ExternalArtifact,
+    Project,
+    WebhookEvent,
+)
+from planning_agent_core.persistence.approvals import SqlAlchemyApprovalRecordStore
 from planning_agent_core.persistence.openproject_artifacts import (
     SqlAlchemyOpenProjectArtifactStore,
 )
 from planning_agent_core.persistence.event_inbox import SqlAlchemyEventInbox
+from planning_agent_core.ports.approvals import ApprovalRecordInput
 
 
 POSTGRES_URL_ENV = "PHASE3_POSTGRES_DATABASE_URL"
@@ -53,7 +62,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
     with psycopg.connect(_to_psycopg_url(migrated_postgres_url)) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
-            assert cur.fetchone()[0] == "0006_op_reconciliation"
+            assert cur.fetchone()[0] == "0007_approval_records"
 
             cur.execute(
                 """
@@ -64,6 +73,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                       'pm_webhook_events',
                       'agent_jobs',
                       'agent_executions',
+                      'approval_records',
                       'openproject_outbound_operations',
                       'openproject_reconciliation_snapshots',
                       'pm_context_snapshots'
@@ -74,6 +84,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
             assert [row[0] for row in cur.fetchall()] == [
                 "agent_executions",
                 "agent_jobs",
+                "approval_records",
                 "openproject_outbound_operations",
                 "openproject_reconciliation_snapshots",
                 "pm_context_snapshots",
@@ -182,6 +193,55 @@ async def test_phase4_openproject_artifact_mapping_upsert_is_idempotent(
             )
             assert artifact is not None
             assert artifact.external_payload == {"subject": "Second"}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase4_approval_record_source_decision_is_idempotent(
+    migrated_postgres_url: str,
+):
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    source_event_id = f"approval-{uuid4()}"
+
+    try:
+        async with session_factory() as session:
+            project = Project(
+                project_key=f"phase4-approvals-{uuid4()}",
+                name="Phase 4 Approval Record",
+            )
+            session.add(project)
+            await session.commit()
+            await session.refresh(project)
+
+            store = SqlAlchemyApprovalRecordStore(session)
+            first = await store.record(
+                ApprovalRecordInput(
+                    project_id=project.id,
+                    approval_scope=ApprovalScope.PLANNING,
+                    decision=ApprovalDecision.APPROVED,
+                    source_event_id=source_event_id,
+                    payload={"comment": {"raw": "Approved."}},
+                )
+            )
+            second = await store.record(
+                ApprovalRecordInput(
+                    project_id=project.id,
+                    approval_scope=ApprovalScope.PLANNING,
+                    decision=ApprovalDecision.APPROVED,
+                    source_event_id=source_event_id,
+                    payload={"comment": {"raw": "Approved."}},
+                )
+            )
+
+            assert second.approval_id == first.approval_id
+            approvals = await session.scalars(
+                select(ApprovalRecord).where(
+                    ApprovalRecord.source_event_id == source_event_id
+                )
+            )
+            assert len(list(approvals)) == 1
     finally:
         await engine.dispose()
 

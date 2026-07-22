@@ -242,6 +242,65 @@ class OpenProjectReconciliationSnapshot(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class ApprovalRecord(Base):
+    __tablename__ = "approval_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_system",
+            "source_event_id",
+            "approval_scope",
+            "decision",
+            name="uq_approval_records_source_decision",
+        ),
+        CheckConstraint(
+            "approval_scope IN ('planning', 'task_completion')",
+            name="ck_approval_records_scope",
+        ),
+        CheckConstraint(
+            "decision IN ('approved', 'changes_requested', 'cancelled')",
+            name="ck_approval_records_decision",
+        ),
+        Index("idx_approval_records_project_scope", "project_id", "approval_scope", "created_at"),
+        Index("idx_approval_records_source_event", "source_system", "source_event_id"),
+        Index(
+            "idx_approval_records_external_work_package",
+            "source_system",
+            "external_work_package_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    planning_session_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("planning_sessions.id", ondelete="SET NULL"),
+    )
+    plan_version_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("plan_versions.id", ondelete="SET NULL"),
+    )
+    external_artifact_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("external_artifacts.id", ondelete="SET NULL"),
+    )
+    source_system: Mapped[str] = mapped_column(String(60), nullable=False, default="openproject")
+    source_event_id: Mapped[str | None] = mapped_column(Text)
+    external_project_id: Mapped[str | None] = mapped_column(Text)
+    external_work_package_id: Mapped[str | None] = mapped_column(Text)
+    external_comment_id: Mapped[str | None] = mapped_column(Text)
+    approval_scope: Mapped[str] = mapped_column(String(40), nullable=False)
+    decision: Mapped[str] = mapped_column(String(40), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class ProvisioningJob(Base):
     __tablename__ = "provisioning_jobs"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)

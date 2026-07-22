@@ -69,6 +69,17 @@ class VerificationOutcome(StrEnum):
     UNVERIFIABLE = "unverifiable"
 
 
+class ApprovalScope(StrEnum):
+    PLANNING = "planning"
+    TASK_COMPLETION = "task_completion"
+
+
+class ApprovalDecision(StrEnum):
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    CANCELLED = "cancelled"
+
+
 class RepositoryAccessMode(StrEnum):
     READ_ONLY = "READ_ONLY"
     READ_WRITE = "READ_WRITE"

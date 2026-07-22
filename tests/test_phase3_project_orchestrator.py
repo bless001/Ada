@@ -13,7 +13,11 @@ from planning_agent_core.application.project_orchestrator import (
     ProjectEventOrchestrator,
     should_resume_planning,
 )
-from planning_agent_core.domain.enums import AgentExecutionStatus
+from planning_agent_core.domain.enums import (
+    AgentExecutionStatus,
+    ApprovalDecision,
+    ApprovalScope,
+)
 from planning_agent_core.domain.events import EventEnvelope
 from planning_agent_core.ports.executions import AgentExecutionStart
 
@@ -75,6 +79,21 @@ class FakeExecutionRecorder:
 
     async def finish(self, execution_id, **kwargs):
         self.finish_calls.append({"execution_id": execution_id, **kwargs})
+
+
+class FakeApprovalStore:
+    def __init__(self):
+        self.approval_id = uuid4()
+        self.records: list[Any] = []
+
+    async def record(self, approval):
+        self.records.append(approval)
+        return SimpleNamespace(
+            approval_id=self.approval_id,
+            project_id=approval.project_id,
+            approval_scope=approval.approval_scope,
+            decision=approval.decision,
+        )
 
 
 @pytest.mark.asyncio
@@ -153,6 +172,8 @@ async def test_project_orchestrator_records_planning_execution_for_resume():
                 "workflow": "planning",
                 "event_source": "openproject",
                 "event_type": "work_package.comment_created",
+                "feedback_intent": "general_comment",
+                "approval_scope": None,
             },
         }
     ]
@@ -162,6 +183,89 @@ async def test_project_orchestrator_records_planning_execution_for_resume():
             "status": AgentExecutionStatus.SUCCEEDED,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_project_orchestrator_records_plan_approval_and_resumes_review_session():
+    project_id = uuid4()
+    artifact_id = uuid4()
+    plan_version_id = uuid4()
+    session_id = uuid4()
+    event_id = str(uuid4())
+    event = EventEnvelope(
+        source="openproject",
+        event_type="work_package.comment_created",
+        external_project_id="12",
+        external_work_package_id="34",
+        external_comment_id="99",
+        payload={"comment": {"raw": "Please approve this plan."}},
+    )
+    inbox = FakeInbox(event=event, marks=[])
+    db = FakeDb(
+        SimpleNamespace(id=artifact_id, project_id=project_id),
+        SimpleNamespace(id=plan_version_id),
+        SimpleNamespace(id=session_id),
+    )
+    runner = FakeRunner(result={"ambiguity_status": "clear"})
+    approval_store = FakeApprovalStore()
+    orchestrator = ProjectEventOrchestrator(
+        db=db,
+        event_inbox=inbox,
+        planning_runner=runner,
+        approval_store=approval_store,
+    )
+
+    result = await orchestrator.handle_persisted_event(event_id)
+
+    assert result.action == OrchestrationAction.RESUME_PLANNING
+    assert result.approval_id == approval_store.approval_id
+    assert runner.calls == [session_id]
+    approval = approval_store.records[0]
+    assert approval.project_id == project_id
+    assert approval.planning_session_id == session_id
+    assert approval.plan_version_id == plan_version_id
+    assert approval.external_artifact_id == artifact_id
+    assert approval.approval_scope == ApprovalScope.PLANNING
+    assert approval.decision == ApprovalDecision.APPROVED
+    assert approval.source_event_id == event_id
+    assert approval.external_project_id == "12"
+    assert approval.external_work_package_id == "34"
+    assert approval.external_comment_id == "99"
+
+
+@pytest.mark.asyncio
+async def test_project_orchestrator_records_task_completion_approval_without_planning_resume():
+    project_id = uuid4()
+    artifact_id = uuid4()
+    event_id = str(uuid4())
+    event = EventEnvelope(
+        source="openproject",
+        event_type="work_package.comment_created",
+        external_work_package_id="34",
+        external_comment_id="99",
+        payload={"comment": {"raw": "Approved task completion."}},
+    )
+    inbox = FakeInbox(event=event, marks=[])
+    db = FakeDb(SimpleNamespace(id=artifact_id, project_id=project_id))
+    runner = FakeRunner()
+    approval_store = FakeApprovalStore()
+    orchestrator = ProjectEventOrchestrator(
+        db=db,
+        event_inbox=inbox,
+        planning_runner=runner,
+        approval_store=approval_store,
+    )
+
+    result = await orchestrator.handle_persisted_event(event_id)
+
+    assert result.action == OrchestrationAction.CONTEXT_SYNC_ONLY
+    assert result.project_id == project_id
+    assert result.approval_id == approval_store.approval_id
+    assert runner.calls == []
+    approval = approval_store.records[0]
+    assert approval.approval_scope == ApprovalScope.TASK_COMPLETION
+    assert approval.decision == ApprovalDecision.APPROVED
+    assert approval.external_artifact_id == artifact_id
 
 
 @pytest.mark.asyncio
@@ -299,6 +403,15 @@ def test_should_resume_planning_uses_comment_and_feedback_markers():
             source="openproject",
             event_type="work_package.updated",
             payload={"action": "approval.created"},
+        )
+    )
+    assert not should_resume_planning(
+        EventEnvelope(
+            source="openproject",
+            event_type="work_package.comment_created",
+            external_work_package_id="34",
+            external_comment_id="99",
+            payload={"comment": {"raw": "Approved task completion."}},
         )
     )
     assert not should_resume_planning(

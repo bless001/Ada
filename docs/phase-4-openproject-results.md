@@ -23,8 +23,15 @@ Baseline date: 2026-07-21
 - Updated the OpenProject adapter to capture work-package payloads and activities before PATCH updates, and work-package payloads before idempotent comments.
 - Added `OpenProjectArtifactMapping`, `OpenProjectArtifactStorePort`, and `SqlAlchemyOpenProjectArtifactStore` for durable OpenProject-to-local mapping upserts.
 - Updated the OpenProject adapter to upsert `ExternalArtifact` rows after project creation, work-package creation, work-package update, comment-time discovery, and duplicate-success replay.
-- Updated the opt-in live PostgreSQL integration test to expect Alembic head `0006_op_reconciliation`.
+- Added `approval_records` as the durable audit table for plan and task-completion approval decisions.
+- Added Alembic migration `0007_approval_records`.
+- Added `ApprovalScope`, `ApprovalDecision`, `ApprovalRecordStorePort`, and `SqlAlchemyApprovalRecordStore`.
+- Added OpenProject approval classification that maps approvals to `approved`, plan feedback/rework/requirement changes to `changes_requested`, and cancellations to `cancelled`.
+- Updated OpenProject event orchestration to record approval decisions, resume plan approvals from `plan_drafted` and `awaiting_review` sessions, and record task-completion approvals without starting a planning workflow.
+- Added source-decision idempotency for approval records so retried webhook jobs do not duplicate approval audit rows.
+- Updated the opt-in live PostgreSQL integration test to expect Alembic head `0007_approval_records`.
 - Added an opt-in live PostgreSQL integration assertion for idempotent OpenProject artifact upserts.
+- Added an opt-in live PostgreSQL integration assertion for idempotent approval source decisions.
 
 ## Runtime Compatibility Notes
 
@@ -40,6 +47,9 @@ Baseline date: 2026-07-21
 - Reconciliation summaries are metadata only; the complete pre-update OpenProject payload remains the source of truth for preserving human edits.
 - Artifact mapping capture is opt-in through `OpenProjectArtifactStorePort`; callers must provide a local project ID so OpenProject IDs can route future webhooks back to local projects.
 - Work-package update paths first record the discovered pre-update work package mapping, then refresh the mapping again after the PATCH succeeds.
+- Approval records are immutable audit rows keyed by source event context rather than mutable workflow state.
+- Repeated approval source decisions return the existing approval record ID.
+- Planning approval events can resume review-state planning sessions; task-completion approvals are recorded as context-only until coding and verification workflows exist.
 
 ## Verification
 
@@ -47,13 +57,13 @@ Focused Phase 4 command:
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
-.venv\Scripts\python.exe -m pytest -q tests/test_phase4_openproject_mapping.py tests/test_phase4_openproject_adapter.py tests/test_phase3_project_orchestrator.py
+.venv\Scripts\python.exe -m pytest -q tests/test_phase4_openproject_approvals.py tests/test_phase4_openproject_mapping.py tests/test_phase4_openproject_adapter.py tests/test_phase3_project_orchestrator.py
 ```
 
 Result:
 
 ```text
-33 passed in 0.39s
+41 passed in 0.38s
 ```
 
 Full suite command:
@@ -66,7 +76,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-75 passed, 4 skipped, 4 warnings in 1.04s
+83 passed, 5 skipped, 4 warnings in 1.02s
 ```
 
 Live PostgreSQL command:
@@ -82,13 +92,14 @@ docker rm -f ada-phase4-pg-$PID
 Result:
 
 ```text
-4 passed in 2.85s
+5 passed in 2.23s
 ```
 
 Alembic history:
 
 ```text
-0005_op_outbound_ops -> 0006_op_reconciliation (head), add OpenProject reconciliation snapshots
+0006_op_reconciliation -> 0007_approval_records (head), add approval records
+0005_op_outbound_ops -> 0006_op_reconciliation, add OpenProject reconciliation snapshots
 0004_agent_executions -> 0005_op_outbound_ops, add OpenProject outbound operation idempotency
 0003_agent_job_leases -> 0004_agent_executions, add agent execution tracking
 0002_webhook_event_idempotency -> 0003_agent_job_leases, add agent job leases and retry scheduling
@@ -98,5 +109,4 @@ Alembic history:
 
 ## Remaining Phase 4 Work
 
-- Add approval records and explicit resume logic for planning and task-completion approvals.
 - Update OpenProject provisioning for idempotent discovery of types, statuses, custom fields, webhooks, permissions, and sample binding.

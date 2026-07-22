@@ -8,10 +8,28 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from planning_agent_core.domain.enums import AgentExecutionStatus, PlanningSessionStatus
+from planning_agent_core.application.openproject_approvals import (
+    OpenProjectApprovalDecision,
+    classify_openproject_approval,
+)
+from planning_agent_core.application.openproject_feedback import (
+    OpenProjectFeedbackClassification,
+    OpenProjectFeedbackIntent,
+    classify_openproject_feedback,
+)
+from planning_agent_core.domain.enums import (
+    AgentExecutionStatus,
+    ApprovalScope,
+    PlanningSessionStatus,
+    PlanVersionStatus,
+)
 from planning_agent_core.domain.events import EventEnvelope
-from planning_agent_core.application.openproject_feedback import classify_openproject_feedback
-from planning_agent_core.models import ExternalArtifact, PlanningSession
+from planning_agent_core.models import ExternalArtifact, PlanningSession, PlanVersion
+from planning_agent_core.persistence.approvals import SqlAlchemyApprovalRecordStore
+from planning_agent_core.ports.approvals import (
+    ApprovalRecordInput,
+    ApprovalRecordStorePort,
+)
 from planning_agent_core.ports.event_inbox import EventInboxPort
 from planning_agent_core.ports.executions import AgentExecutionRecorderPort
 
@@ -34,6 +52,7 @@ class OrchestrationResult:
     thread_id: str | None = None
     execution_id: UUID | None = None
     workflow_result: dict[str, Any] | None = None
+    approval_id: UUID | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -46,8 +65,15 @@ class OrchestrationResult:
             ),
             "thread_id": self.thread_id,
             "execution_id": str(self.execution_id) if self.execution_id else None,
+            "approval_id": str(self.approval_id) if self.approval_id else None,
             "workflow_result": self.workflow_result,
         }
+
+
+@dataclass(frozen=True)
+class ResolvedOpenProjectMapping:
+    project_id: UUID
+    artifact_id: UUID | None = None
 
 
 class PlanningRunnerPort(Protocol):
@@ -63,11 +89,13 @@ class ProjectEventOrchestrator:
         event_inbox: EventInboxPort,
         planning_runner: PlanningRunnerPort,
         execution_recorder: AgentExecutionRecorderPort | None = None,
+        approval_store: ApprovalRecordStorePort | None = None,
     ) -> None:
         self.db = db
         self.event_inbox = event_inbox
         self.planning_runner = planning_runner
         self.execution_recorder = execution_recorder
+        self.approval_store = approval_store
 
     async def handle_persisted_event(self, event_id: str) -> OrchestrationResult:
         envelope = await self.event_inbox.get(event_id)
@@ -97,15 +125,18 @@ class ProjectEventOrchestrator:
                 reason=f"Unsupported event source: {envelope.source}",
             )
 
-        project_id = await self._resolve_project_id(envelope)
-        if project_id is None:
+        mapping = await self._resolve_openproject_mapping(envelope)
+        if mapping is None:
             return OrchestrationResult(
                 event_id=event_id,
                 action=OrchestrationAction.UNMAPPED_PROJECT,
                 reason="No local project mapping exists for this OpenProject event",
             )
+        project_id = mapping.project_id
 
-        if not should_resume_planning(envelope):
+        feedback = classify_openproject_feedback(envelope)
+        approval_decision = classify_openproject_approval(envelope, feedback)
+        if not feedback.resumable and approval_decision is None:
             return OrchestrationResult(
                 event_id=event_id,
                 action=OrchestrationAction.CONTEXT_SYNC_ONLY,
@@ -113,13 +144,59 @@ class ProjectEventOrchestrator:
                 project_id=project_id,
             )
 
-        session = await self._find_waiting_planning_session(project_id)
+        plan_version = None
+        if (
+            approval_decision is not None
+            and approval_decision.approval_scope == ApprovalScope.PLANNING
+        ):
+            plan_version = await self._find_latest_review_plan_version(project_id)
+
+        session = None
+        if (
+            approval_decision is None
+            or approval_decision.approval_scope == ApprovalScope.PLANNING
+        ):
+            session = await self._find_planning_session_for_feedback(
+                project_id=project_id,
+                feedback=feedback,
+                approval_decision=approval_decision,
+            )
+
+        approval_id = None
+        if approval_decision is not None:
+            approval = await self._record_approval(
+                event_id=event_id,
+                envelope=envelope,
+                project_id=project_id,
+                artifact_id=mapping.artifact_id,
+                approval_decision=approval_decision,
+                planning_session_id=session.id if session else None,
+                plan_version_id=plan_version.id if plan_version else None,
+            )
+            approval_id = approval.approval_id
+
+        if (
+            approval_decision is not None
+            and approval_decision.approval_scope == ApprovalScope.TASK_COMPLETION
+        ):
+            return OrchestrationResult(
+                event_id=event_id,
+                action=OrchestrationAction.CONTEXT_SYNC_ONLY,
+                reason=(
+                    "Task-completion approval recorded; coding and verification "
+                    "workflow resume is not enabled in this slice"
+                ),
+                project_id=project_id,
+                approval_id=approval_id,
+            )
+
         if session is None:
             return OrchestrationResult(
                 event_id=event_id,
                 action=OrchestrationAction.NO_WAITING_SESSION,
                 reason="No waiting planning session exists for the mapped project",
                 project_id=project_id,
+                approval_id=approval_id,
             )
 
         thread_id = f"planning-session-{session.id}"
@@ -134,6 +211,12 @@ class ProjectEventOrchestrator:
                     "workflow": "planning",
                     "event_source": envelope.source,
                     "event_type": envelope.event_type,
+                    "feedback_intent": feedback.intent.value,
+                    "approval_scope": (
+                        approval_decision.approval_scope.value
+                        if approval_decision
+                        else None
+                    ),
                 },
             )
 
@@ -166,22 +249,32 @@ class ProjectEventOrchestrator:
             thread_id=thread_id,
             execution_id=execution.execution_id if execution else None,
             workflow_result=workflow_result,
+            approval_id=approval_id,
         )
 
-    async def _resolve_project_id(self, envelope: EventEnvelope) -> UUID | None:
+    async def _resolve_openproject_mapping(
+        self,
+        envelope: EventEnvelope,
+    ) -> ResolvedOpenProjectMapping | None:
         project_artifact = await self._find_openproject_artifact(
             artifact_type="project",
             external_id=envelope.external_project_id,
         )
         if project_artifact is not None:
-            return project_artifact.project_id
+            return ResolvedOpenProjectMapping(
+                project_id=project_artifact.project_id,
+                artifact_id=getattr(project_artifact, "id", None),
+            )
 
         work_package_artifact = await self._find_openproject_artifact(
             artifact_type="work_package",
             external_id=envelope.external_work_package_id,
         )
         if work_package_artifact is not None:
-            return work_package_artifact.project_id
+            return ResolvedOpenProjectMapping(
+                project_id=work_package_artifact.project_id,
+                artifact_id=getattr(work_package_artifact, "id", None),
+            )
 
         return None
 
@@ -202,14 +295,16 @@ class ProjectEventOrchestrator:
             )
         )
 
-    async def _find_waiting_planning_session(
+    async def _find_planning_session_for_feedback(
         self,
+        *,
         project_id: UUID,
+        feedback: OpenProjectFeedbackClassification,
+        approval_decision: OpenProjectApprovalDecision | None = None,
     ) -> PlanningSession | None:
-        waiting_statuses = (
-            PlanningSessionStatus.INTAKE,
-            PlanningSessionStatus.NEEDS_CLARIFICATION,
-            PlanningSessionStatus.READY_FOR_PLANNING,
+        waiting_statuses = _planning_session_statuses_for_feedback(
+            feedback=feedback,
+            approval_decision=approval_decision,
         )
         return await self.db.scalar(
             select(PlanningSession)
@@ -221,9 +316,96 @@ class ProjectEventOrchestrator:
             .limit(1)
         )
 
+    async def _find_latest_review_plan_version(
+        self,
+        project_id: UUID,
+    ) -> PlanVersion | None:
+        return await self.db.scalar(
+            select(PlanVersion)
+            .where(
+                PlanVersion.project_id == project_id,
+                PlanVersion.status.in_(
+                    [
+                        PlanVersionStatus.AWAITING_REVIEW.value,
+                        PlanVersionStatus.DRAFT.value,
+                    ]
+                ),
+            )
+            .order_by(PlanVersion.version_number.desc())
+            .limit(1)
+        )
+
+    async def _record_approval(
+        self,
+        *,
+        event_id: str,
+        envelope: EventEnvelope,
+        project_id: UUID,
+        artifact_id: UUID | None,
+        approval_decision: OpenProjectApprovalDecision,
+        planning_session_id: UUID | None,
+        plan_version_id: UUID | None,
+    ):
+        store = self.approval_store or SqlAlchemyApprovalRecordStore(self.db)
+        return await store.record(
+            ApprovalRecordInput(
+                project_id=project_id,
+                approval_scope=approval_decision.approval_scope,
+                decision=approval_decision.decision,
+                source_system=envelope.source,
+                source_event_id=event_id,
+                planning_session_id=planning_session_id,
+                plan_version_id=plan_version_id,
+                external_artifact_id=artifact_id,
+                external_project_id=envelope.external_project_id,
+                external_work_package_id=envelope.external_work_package_id,
+                external_comment_id=envelope.external_comment_id,
+                reason=approval_decision.reason,
+                payload=envelope.payload,
+            )
+        )
+
 
 def should_resume_planning(envelope: EventEnvelope) -> bool:
-    return classify_openproject_feedback(envelope).resumable
+    feedback = classify_openproject_feedback(envelope)
+    approval_decision = classify_openproject_approval(envelope, feedback)
+    if (
+        approval_decision is not None
+        and approval_decision.approval_scope == ApprovalScope.TASK_COMPLETION
+    ):
+        return False
+    return feedback.resumable
+
+
+def _planning_session_statuses_for_feedback(
+    *,
+    feedback: OpenProjectFeedbackClassification,
+    approval_decision: OpenProjectApprovalDecision | None,
+) -> tuple[PlanningSessionStatus, ...]:
+    review_feedback_intents = {
+        OpenProjectFeedbackIntent.APPROVAL,
+        OpenProjectFeedbackIntent.CANCELLATION,
+        OpenProjectFeedbackIntent.PLAN_FEEDBACK,
+        OpenProjectFeedbackIntent.REQUIREMENT_CHANGE,
+        OpenProjectFeedbackIntent.REWORK_REQUEST,
+    }
+    if (
+        approval_decision is not None
+        and approval_decision.approval_scope == ApprovalScope.PLANNING
+    ) or feedback.intent in review_feedback_intents:
+        return (
+            PlanningSessionStatus.PLAN_DRAFTED,
+            PlanningSessionStatus.AWAITING_REVIEW,
+            PlanningSessionStatus.READY_FOR_PLANNING,
+            PlanningSessionStatus.NEEDS_CLARIFICATION,
+            PlanningSessionStatus.INTAKE,
+        )
+
+    return (
+        PlanningSessionStatus.INTAKE,
+        PlanningSessionStatus.NEEDS_CLARIFICATION,
+        PlanningSessionStatus.READY_FOR_PLANNING,
+    )
 
 
 def classify_workflow_completion(workflow_result: dict[str, Any]) -> AgentExecutionStatus:
