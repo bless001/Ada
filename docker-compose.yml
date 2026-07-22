@@ -128,6 +128,16 @@ services:
       OP_CREATE_STARTER_PROJECT: ${OP_CREATE_STARTER_PROJECT}
       OP_STARTER_PROJECT_IDENTIFIER: ${OP_STARTER_PROJECT_IDENTIFIER}
       OP_STARTER_PROJECT_NAME: ${OP_STARTER_PROJECT_NAME}
+      OP_PROVISIONING_OUTPUT_FILE: /agent-secrets/openproject_provisioning.json
+      OP_REQUIRED_WORK_PACKAGE_TYPES: "${OP_REQUIRED_WORK_PACKAGE_TYPES:-Epic,Story,Task}"
+      OP_SEMANTIC_STATUS_NAMES: "${OP_SEMANTIC_STATUS_NAMES:-Draft,Needs clarification,Awaiting approval,Ready,In progress,Blocked,Ready for verification,Changes required,Verified,Done,Cancelled}"
+      OP_REQUIRED_PRIORITIES: "${OP_REQUIRED_PRIORITIES:-Low,Normal,High,Urgent,Immediate}"
+      OP_REQUIRED_PROJECT_MODULES: "${OP_REQUIRED_PROJECT_MODULES:-work_package_tracking,wiki,repository}"
+      OP_ENSURE_AGENT_CUSTOM_FIELDS: "${OP_ENSURE_AGENT_CUSTOM_FIELDS:-false}"
+      OP_AGENT_ROLE_NAME: "${OP_AGENT_ROLE_NAME:-Coding Agent}"
+      OP_AGENT_ROLE_PERMISSIONS: "${OP_AGENT_ROLE_PERMISSIONS:-view_work_packages,add_work_packages,edit_work_packages,add_work_package_notes,view_project}"
+      OP_STARTER_REPOSITORY_KEY: "${OP_STARTER_REPOSITORY_KEY:-sample-project}"
+      OP_STARTER_REPOSITORY_PATH: "${OP_STARTER_REPOSITORY_PATH:-/workspace/repositories/sample_project}"
     volumes:
       - ./infra/openproject/provision:/provision:ro
       - openproject_agent_secrets:/agent-secrets
@@ -326,6 +336,7 @@ services:
       - WEAVIATE_URL=http://weaviate:8080
       - OPENPROJECT_BASE_URL=http://openproject
       - OPENPROJECT_API_TOKEN_FILE=/agent-secrets/openproject_api_token
+      - OPENPROJECT_PROVISIONING_REPORT_FILE=/agent-secrets/openproject_provisioning.json
       - APP_ENV=development
       - LLM_BASE_URL=http://localhost:8080/v1
       - LLM_MODEL=local-coding-model

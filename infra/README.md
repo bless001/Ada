@@ -26,6 +26,7 @@ admin permissions for the bot
 OpenProject API token for the bot
 OpenProject webhook pointing to agent-webhook
 optional starter OpenProject project
+optional starter project module and repository binding metadata
 ```
 
 The API token is saved in a Docker volume and mounted read-only into planning-agent-core:
@@ -34,7 +35,33 @@ The API token is saved in a Docker volume and mounted read-only into planning-ag
 /agent-secrets/openproject_api_token
 ```
 
+The provisioner also writes a discovery report to the same Docker volume:
+
+```text
+/agent-secrets/openproject_provisioning.json
+```
+
+That report records discovered OpenProject IDs for required work package types, semantic statuses, priorities, recommended agent custom fields, webhook configuration, bot role/permission setup, and optional starter project binding. It is intentionally name-based; the agent code should not assume numeric OpenProject IDs.
+
 So you do **not** need to manually create a bot user, API token, or webhook in the OpenProject UI.
+
+## OpenProject provisioning controls
+
+The following environment variables tune discovery and optional setup:
+
+```env
+OP_REQUIRED_WORK_PACKAGE_TYPES=Epic,Story,Task
+OP_SEMANTIC_STATUS_NAMES=Draft,Needs clarification,Awaiting approval,Ready,In progress,Blocked,Ready for verification,Changes required,Verified,Done,Cancelled
+OP_REQUIRED_PRIORITIES=Low,Normal,High,Urgent,Immediate
+OP_REQUIRED_PROJECT_MODULES=work_package_tracking,wiki,repository
+OP_ENSURE_AGENT_CUSTOM_FIELDS=false
+OP_AGENT_ROLE_NAME=Coding Agent
+OP_AGENT_ROLE_PERMISSIONS=view_work_packages,add_work_packages,edit_work_packages,add_work_package_notes,view_project
+OP_STARTER_REPOSITORY_KEY=sample-project
+OP_STARTER_REPOSITORY_PATH=/workspace/repositories/sample_project
+```
+
+By default, custom fields are discovered and reported but not created. Set `OP_ENSURE_AGENT_CUSTOM_FIELDS=true` only after confirming the OpenProject version supports the desired work-package custom field format and assignment model.
 
 ## Start
 

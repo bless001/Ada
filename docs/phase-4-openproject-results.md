@@ -32,6 +32,12 @@ Baseline date: 2026-07-21
 - Updated the opt-in live PostgreSQL integration test to expect Alembic head `0007_approval_records`.
 - Added an opt-in live PostgreSQL integration assertion for idempotent OpenProject artifact upserts.
 - Added an opt-in live PostgreSQL integration assertion for idempotent approval source decisions.
+- Hardened `infra/openproject/provision/ensure_agent_bot_token_webhook.rb` so provisioning discovers required work-package types, semantic statuses, priorities, and recommended agent custom fields by name before projection depends on them.
+- Added a non-secret OpenProject provisioning report at `/agent-secrets/openproject_provisioning.json` containing discovered IDs, webhook configuration, starter project metadata, project modules, bot role/permission setup, sample repository binding, and warnings.
+- Added idempotent starter project module setup, non-admin bot role setup, and sample project repository binding metadata.
+- Kept custom field creation opt-in through `OP_ENSURE_AGENT_CUSTOM_FIELDS=false` by default because OpenProject custom-field assignment behavior is version-sensitive.
+- Added Docker Compose defaults for provisioning discovery inputs and mounted the provisioning report path into planning-agent-core.
+- Added static regression tests for the OpenProject provisioning contract.
 
 ## Runtime Compatibility Notes
 
@@ -50,6 +56,9 @@ Baseline date: 2026-07-21
 - Approval records are immutable audit rows keyed by source event context rather than mutable workflow state.
 - Repeated approval source decisions return the existing approval record ID.
 - Planning approval events can resume review-state planning sessions; task-completion approvals are recorded as context-only until coding and verification workflows exist.
+- The provisioner does not create work-package types, statuses, or priorities. It discovers and reports them because OpenProject workflows are version- and permission-sensitive, and the adapter already fails clearly when a semantic mapping is absent.
+- Recommended custom fields are discovered and reported by default. Set `OP_ENSURE_AGENT_CUSTOM_FIELDS=true` only when the target OpenProject version supports the desired work-package custom-field format and assignment model.
+- The provisioning report records only the API token file path, not the token value.
 
 ## Verification
 
@@ -57,13 +66,13 @@ Focused Phase 4 command:
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
-.venv\Scripts\python.exe -m pytest -q tests/test_phase4_openproject_approvals.py tests/test_phase4_openproject_mapping.py tests/test_phase4_openproject_adapter.py tests/test_phase3_project_orchestrator.py
+.venv\Scripts\python.exe -m pytest -q tests/test_phase4_openproject_provisioning.py tests/test_phase4_openproject_approvals.py tests/test_phase4_openproject_mapping.py tests/test_phase4_openproject_adapter.py tests/test_phase3_project_orchestrator.py
 ```
 
 Result:
 
 ```text
-41 passed in 0.38s
+46 passed in 0.43s
 ```
 
 Full suite command:
@@ -76,7 +85,7 @@ $env:PYTHONIOENCODING='utf-8'
 Result:
 
 ```text
-83 passed, 5 skipped, 4 warnings in 1.02s
+88 passed, 5 skipped, 4 warnings in 1.24s
 ```
 
 Live PostgreSQL command:
@@ -92,7 +101,43 @@ docker rm -f ada-phase4-pg-$PID
 Result:
 
 ```text
-5 passed in 2.23s
+5 passed in 2.56s
+```
+
+OpenProject provisioning Ruby syntax command:
+
+```powershell
+docker compose run --rm --no-deps openproject-provision ruby -c /provision/ensure_agent_bot_token_webhook.rb
+```
+
+Result:
+
+```text
+Syntax OK
+```
+
+Compose validation command:
+
+```powershell
+docker compose config --quiet
+```
+
+Result:
+
+```text
+passed
+```
+
+Whitespace validation command:
+
+```powershell
+git diff --check -- ':!.venv'
+```
+
+Result:
+
+```text
+passed with CRLF normalization warnings only
 ```
 
 Alembic history:
@@ -107,6 +152,6 @@ Alembic history:
 <base> -> 0001_current_baseline, current baseline schema
 ```
 
-## Remaining Phase 4 Work
+## Phase 4 Status
 
-- Update OpenProject provisioning for idempotent discovery of types, statuses, custom fields, webhooks, permissions, and sample binding.
+- Phase 4 planned tasks are complete.
