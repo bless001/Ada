@@ -79,17 +79,22 @@ Current infrastructure ports:
 4. Route persisted OpenProject planning feedback through `ProjectEventOrchestrator` with `agent_platform_service`.
 5. Wrap approved coding attempts in `CodingAgentRequest` and invoke through the same orchestrator.
 6. Feed coding results and original acceptance criteria into `VerificationAgentRequest`.
-7. Replace in-memory result and checkpoint stores with PostgreSQL-backed implementations.
-8. Move OpenProject, Neo4j, Weaviate, and repository indexing triggers behind orchestrator-driven events.
-9. Add richer agent workflows internally without changing factory or orchestrator code.
-10. Retire legacy direct workflow entry points only after API and integration tests prove parity.
+7. Add an application `AgentTransitionRequestResolver` that loads persisted artifacts and builds
+   the next typed request.
+8. Use `AgentPlatformService.execute_flow` for bounded automatic transitions; keep `execute` for
+   event-driven single-step execution.
+9. Replace in-memory result and checkpoint stores with PostgreSQL-backed implementations.
+10. Move OpenProject, Neo4j, Weaviate, and repository indexing triggers behind orchestrator-driven events.
+11. Add richer agent workflows internally without changing factory or orchestrator code.
+12. Retire legacy direct workflow entry points only after API and integration tests prove parity.
 
 ## Example Flow
 
 ```python
 from planning_agent_core.agent_platform import AgentDependencyContainer
 from planning_agent_core.agent_platform.factory import create_default_agent_factory
-from planning_agent_core.agent_platform.orchestration import AgentExecutionRequest, AgentOrchestrator
+from planning_agent_core.agent_platform.orchestration import AgentExecutionRequest
+from planning_agent_core.services.agent_platform_service import AgentPlatformService
 
 config = load_agent_platform_config("planning_agent_core/agent-platform.example.json")
 dependencies = AgentDependencyContainer(
@@ -100,18 +105,23 @@ dependencies = AgentDependencyContainer(
     work_package_gateway=openproject_gateway,
 )
 factory = create_default_agent_factory(dependencies)
-orchestrator = AgentOrchestrator(factory=factory, dependencies=dependencies)
+service = AgentPlatformService(dependencies=dependencies, factory=factory)
 
-result = await orchestrator.run_once(
+result = await service.execute_flow(
     AgentExecutionRequest(
+        workflow_id="project-demo-task-42",
         agent_type="planning",
         request=planning_request,
         config=config.agents["planning"],
-    )
+    ),
+    transition_resolver=application_transition_resolver,
+    max_steps=10,
 )
 ```
 
-The resulting `route` decides whether to wait for approval, run coding, run verification, complete, retry, or escalate. The next agent is started by the orchestrator, not by the prior agent.
+The resulting flow records every agent step and returns a typed status when it completes or pauses.
+The application transition resolver converts persisted artifacts into the next agent's typed
+request. The previous agent never calls the next agent directly.
 
 ## Fourth-Agent Registration Example
 

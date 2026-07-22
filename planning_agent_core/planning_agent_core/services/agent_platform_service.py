@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from planning_agent_core.agent_platform.factory import AgentFactory, create_default_agent_factory
-from planning_agent_core.agent_platform.orchestration import AgentExecutionRequest, AgentOrchestrationResult, AgentOrchestrator
+from planning_agent_core.agent_platform.orchestration import (
+    AgentExecutionRequest,
+    AgentFlowOrchestrator,
+    AgentFlowResult,
+    AgentOrchestrationResult,
+    AgentOrchestrator,
+    AgentTransitionRequestResolver,
+)
 from planning_agent_core.agent_platform.runtime import AgentDependencyContainer
 
 
@@ -24,6 +31,19 @@ class AgentPlatformService:
 
     async def execute(self, request: AgentExecutionRequest) -> AgentOrchestrationResult:
         return await self.orchestrator.run_once(request)
+
+    async def execute_flow(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        transition_resolver: AgentTransitionRequestResolver | None = None,
+        max_steps: int = 10,
+    ) -> AgentFlowResult:
+        flow_orchestrator = AgentFlowOrchestrator(
+            step_orchestrator=self.orchestrator,
+            transition_resolver=transition_resolver,
+        )
+        return await flow_orchestrator.run(request, max_steps=max_steps)
 
 
 def create_agent_platform_service(

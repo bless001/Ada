@@ -98,7 +98,10 @@ Specialized agents extend the base contracts:
 - `CodingAgentRequest` and `CodingAgentResult`
 - `VerificationAgentRequest` and `VerificationAgentResult`
 
-The orchestrator accepts `AgentExecutionRequest` and returns `AgentOrchestrationResult`. It preserves specialized subclass payloads using Pydantic `SerializeAsAny` while still enforcing the common base contract.
+The one-step orchestrator accepts `AgentExecutionRequest` and returns `AgentOrchestrationResult`.
+It preserves specialized subclass payloads using Pydantic `SerializeAsAny` while still enforcing
+the common base contract. `AgentFlowOrchestrator` composes these one-step runs into a bounded flow
+and returns `AgentFlowResult` with the complete step history and final pause or completion status.
 
 ## Agent Responsibilities
 
@@ -182,6 +185,20 @@ No orchestrator changes are required.
 - Converts exceptions into structured failed `AgentResult` objects and preserves a checkpoint entry.
 - Computes a high-level route from `AgentNextAction`.
 
+`AgentFlowOrchestrator` adds high-level sequencing without adding agent business logic. It:
+
+- Runs `AgentOrchestrator.run_once` for each step.
+- Stops at approval, clarification, escalation, completion, or a configured step limit.
+- Routes retry to the agent that produced the retry result.
+- Uses an injected `AgentTransitionRequestResolver` to obtain the next specialized request.
+- Rejects handoffs that change the workflow ID or project ID.
+- Returns `transition_pending` when the next typed request is not available yet.
+
+The transition resolver is an application-layer boundary. It may load artifacts, acceptance
+criteria, coding results, or approval records and convert them into the next agent's request. The
+generic orchestrator only checks that the returned request matches the requested route and retains
+flow identity.
+
 Agents never call each other directly. The orchestrator maps next actions to route decisions:
 
 - `run_planning` routes to Planning Agent.
@@ -190,6 +207,10 @@ Agents never call each other directly. The orchestrator maps next actions to rou
 - `request_approval` pauses for an approval gate.
 - `request_clarification` or `escalate` pauses for human intervention.
 - `complete` ends the flow.
+
+`AgentPlatformService.execute` remains the one-step compatibility entry point.
+`AgentPlatformService.execute_flow` runs the bounded flow. A paused flow is resumed with a new
+typed request using the same `workflow_id`; agent checkpoints remain independently namespaced.
 
 ## State And Checkpointing
 
@@ -284,6 +305,8 @@ The new platform test suite covers:
 - Valid request acceptance and invalid request rejection.
 - Result contract validation for planning, coding, and verification.
 - Orchestration transitions for planning approval, coding to verification, verification rework, verification blocked, planning clarification, and coding blocked.
+- Multi-step flow completion, approval and clarification pauses, pending transition input,
+  retry limits, and cross-workflow handoff rejection.
 - Checkpoint namespace isolation and failure checkpoint preservation.
 
 The tests use fake dependencies and do not require Docker, OpenProject, Neo4j, Weaviate, or a live LLM.

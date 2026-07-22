@@ -24,11 +24,20 @@ from planning_agent_core.agent_platform.orchestration.contracts import (
     InMemoryAgentResultStore,
     PersistedAgentResult,
 )
-from planning_agent_core.agent_platform.orchestration.routing import AgentRouteDecision, route_transition
+from planning_agent_core.agent_platform.orchestration.routing import (
+    AgentRouteDecision,
+    route_transition,
+)
 from planning_agent_core.agent_platform.orchestration.transitions import decide_next_transition
 from planning_agent_core.agent_platform.runtime.dependency_container import AgentDependencyContainer
-from planning_agent_core.agent_platform.runtime.event_bus import AgentLifecycleEvent, AgentLifecycleEventType
-from planning_agent_core.agent_platform.runtime.execution_context import AgentExecutionContext, CheckpointIdentity
+from planning_agent_core.agent_platform.runtime.event_bus import (
+    AgentLifecycleEvent,
+    AgentLifecycleEventType,
+)
+from planning_agent_core.agent_platform.runtime.execution_context import (
+    AgentExecutionContext,
+    CheckpointIdentity,
+)
 
 
 class AgentOrchestrationResult(BaseModel):
@@ -47,7 +56,9 @@ class AgentOrchestrator:
     ) -> None:
         self.factory = factory
         self.dependencies = dependencies or factory.dependencies
-        self.result_store = result_store or self.dependencies.result_store or InMemoryAgentResultStore()
+        self.result_store = (
+            result_store or self.dependencies.result_store or InMemoryAgentResultStore()
+        )
 
     async def run_once(self, execution: AgentExecutionRequest) -> AgentOrchestrationResult:
         context = self._context(execution)
@@ -55,17 +66,39 @@ class AgentOrchestrator:
         await self._emit(context, AgentLifecycleEventType.STARTED, AgentRunStatus.RUNNING.value)
         try:
             agent = self.factory.create(agent_type=execution.agent_type, config=execution.config)
-            await self._emit(context, AgentLifecycleEventType.STEP_STARTED, AgentRunStatus.RUNNING.value, step_name="agent.execute")
-            result = await execute_agent_lifecycle(agent, request=execution.request, context=context)
-            await self._emit(context, AgentLifecycleEventType.STEP_COMPLETED, result.status.value, step_name="agent.execute")
+            await self._emit(
+                context,
+                AgentLifecycleEventType.STEP_STARTED,
+                AgentRunStatus.RUNNING.value,
+                step_name="agent.execute",
+            )
+            result = await execute_agent_lifecycle(
+                agent, request=execution.request, context=context
+            )
+            await self._emit(
+                context,
+                AgentLifecycleEventType.STEP_COMPLETED,
+                result.status.value,
+                step_name="agent.execute",
+            )
             await self._emit(context, AgentLifecycleEventType.COMPLETED, result.status.value)
         except Exception as exc:
             result = await self._failure_result(execution, context, exc)
-            await self._emit(context, AgentLifecycleEventType.FAILED, result.status.value, metadata={"error": str(exc)})
+            await self._emit(
+                context,
+                AgentLifecycleEventType.FAILED,
+                result.status.value,
+                metadata={"error": str(exc)},
+            )
         persisted = await self.result_store.persist(result)
-        await self._emit(context, AgentLifecycleEventType.RESULT_PERSISTED, result.status.value, metadata={"result_id": str(persisted.result_id)})
+        await self._emit(
+            context,
+            AgentLifecycleEventType.RESULT_PERSISTED,
+            result.status.value,
+            metadata={"result_id": str(persisted.result_id)},
+        )
         transition = decide_next_transition(result, execution.config)
-        route = route_transition(transition)
+        route = route_transition(transition, current_agent_type=execution.agent_type)
         await self._emit(
             context,
             AgentLifecycleEventType.TRANSITION_REQUESTED,
@@ -161,7 +194,9 @@ class AgentOrchestrator:
             status=AgentRunStatus.FAILED,
             summary=f"{execution.agent_type} agent failed before completing.",
             state=state_ref,
-            next_action=AgentNextAction.RETRY if category == AgentErrorCategory.RETRYABLE_ERROR else AgentNextAction.ESCALATE,
+            next_action=AgentNextAction.RETRY
+            if category == AgentErrorCategory.RETRYABLE_ERROR
+            else AgentNextAction.ESCALATE,
             errors=[
                 AgentError(
                     category=category,

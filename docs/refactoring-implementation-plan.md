@@ -161,6 +161,8 @@ The general agent platform foundation has been added under `planning_agent_core/
 - PostgreSQL platform checkpoint/result persistence is recorded in `docs/agent-platform-postgres-persistence-results.md`.
 - API integration for platform execution is recorded in `docs/agent-platform-api-integration-results.md`.
 - Event orchestration through the platform is recorded in `docs/agent-platform-event-orchestration-results.md`.
+- Bounded multi-agent flow orchestration is recorded in
+  `docs/agent-platform-flow-orchestration-results.md`.
 
 ## Phase 3: Persistence And Event Ingestion
 
