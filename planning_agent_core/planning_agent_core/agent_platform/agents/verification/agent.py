@@ -81,6 +81,8 @@ class VerificationAgent(BaseAgent):
         ]
         return VerificationAgentResult(
             execution_id=typed.execution_id,
+            project_id=typed.project_id,
+            task_id=typed.task_id,
             status=status,
             summary=f"Verification completed with verdict: {verdict.value}.",
             output_artifacts=artifacts,

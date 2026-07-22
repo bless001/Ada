@@ -565,6 +565,69 @@ class AgentExecution(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
 
+class AgentPlatformCheckpointRecord(Base):
+    __tablename__ = "agent_platform_checkpoints"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_key",
+            "workflow_id",
+            "agent_type",
+            "agent_instance_id",
+            "execution_id",
+            "thread_id",
+            "checkpoint_id",
+            name="uq_agent_platform_checkpoints_identity",
+        ),
+        Index(
+            "idx_agent_platform_checkpoints_namespace",
+            "project_key",
+            "workflow_id",
+            "agent_type",
+            "agent_instance_id",
+            "created_at",
+        ),
+        Index(
+            "idx_agent_platform_checkpoints_execution",
+            "execution_id",
+            "agent_type",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    workflow_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    agent_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    agent_instance_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    execution_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    thread_id: Mapped[str] = mapped_column(Text, nullable=False)
+    checkpoint_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    checkpoint_key: Mapped[str] = mapped_column(Text, nullable=False)
+    state_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
+class AgentPlatformResultRecord(Base):
+    __tablename__ = "agent_platform_results"
+    __table_args__ = (
+        Index("idx_agent_platform_results_execution", "execution_id", "agent_type", "created_at"),
+        Index("idx_agent_platform_results_project_status", "project_key", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    execution_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    project_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    task_key: Mapped[str | None] = mapped_column(String(160))
+    agent_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    next_action: Mapped[str | None] = mapped_column(String(80))
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    result_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class OpenProjectContextSnapshot(Base):
     __tablename__ = "pm_context_snapshots"
     __table_args__ = (

@@ -31,6 +31,17 @@ class FakeCodingService:
         return self.result
 
 
+class CapturingResultStore:
+    def __init__(self) -> None:
+        self.results: list[AgentResult] = []
+
+    async def persist(self, result: AgentResult):
+        from planning_agent_core.agent_platform.orchestration import PersistedAgentResult
+
+        self.results.append(result)
+        return PersistedAgentResult(result=result)
+
+
 class DummyAgent(BaseAgent):
     @property
     def agent_type(self) -> str:
@@ -208,6 +219,34 @@ def test_agent_request_contract_rejects_missing_required_fields():
         AgentRequest(agent_type="planning", objective="missing project")
 
 
+def test_platform_persistence_models_are_registered():
+    from planning_agent_core.models import AgentPlatformCheckpointRecord, AgentPlatformResultRecord
+
+    checkpoint_columns = AgentPlatformCheckpointRecord.__table__.columns
+    result_columns = AgentPlatformResultRecord.__table__.columns
+
+    assert {
+        "project_key",
+        "workflow_id",
+        "agent_type",
+        "agent_instance_id",
+        "execution_id",
+        "thread_id",
+        "checkpoint_id",
+        "state_json",
+    } <= set(checkpoint_columns.keys())
+    assert {
+        "execution_id",
+        "project_key",
+        "task_key",
+        "agent_type",
+        "status",
+        "next_action",
+        "result_type",
+        "result_json",
+    } <= set(result_columns.keys())
+
+
 @pytest.mark.asyncio
 async def test_registered_agents_accept_valid_requests_and_produce_valid_results():
     checkpoint_store = InMemoryCheckpointStore()
@@ -323,6 +362,35 @@ async def test_orchestrator_routes_coding_to_verification():
 
     assert result.route.next_agent_type == "verification"
     assert result.route.requires_approval is False
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_uses_dependency_injected_result_store():
+    result_store = CapturingResultStore()
+    dependencies = AgentDependencyContainer(
+        coding_service=FakeCodingService(),
+        result_store=result_store,
+    )
+    orchestrator = AgentOrchestrator(factory=create_default_agent_factory(dependencies), dependencies=dependencies)
+    request = CodingAgentRequest(
+        project_id="demo",
+        task_id="task.agent-contracts",
+        objective="Implement typed agent contracts",
+        approved=True,
+        coding_attempt=_coding_request(),
+    )
+
+    await orchestrator.run_once(
+        AgentExecutionRequest(
+            agent_type="coding",
+            request=request,
+            config=AgentConfig(agent_type="coding", checkpoint_namespace="coding"),
+        )
+    )
+
+    assert len(result_store.results) == 1
+    assert result_store.results[0].project_id == "demo"
+    assert result_store.results[0].task_id == "task.agent-contracts"
 
 
 @pytest.mark.asyncio

@@ -62,6 +62,8 @@ class CodingAgent(BaseAgent):
             state_ref = await self._save_state(context, state)
             return CodingAgentResult(
                 execution_id=typed.execution_id,
+                project_id=typed.project_id,
+                task_id=typed.task_id,
                 status=AgentRunStatus.BLOCKED,
                 summary="Coding agent is missing CodingService dependency.",
                 state=state_ref,
@@ -135,6 +137,8 @@ class CodingAgent(BaseAgent):
             )
         return CodingAgentResult(
             execution_id=typed.execution_id,
+            project_id=typed.project_id,
+            task_id=typed.task_id,
             status=status,
             summary=summary,
             output_artifacts=artifacts,

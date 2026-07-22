@@ -46,7 +46,9 @@ Current infrastructure ports:
 - `planning_agent_core/planning_agent_core/agent_platform/config/*`
 - `planning_agent_core/planning_agent_core/agent_platform/adapters/*`
 - `planning_agent_core/planning_agent_core/services/agent_platform_service.py`
+- `planning_agent_core/planning_agent_core/persistence/agent_platform.py`
 - `planning_agent_core/agent-platform.example.json`
+- `planning_agent_core/alembic/versions/0011_agent_platform_persistence.py`
 - `tests/test_agent_platform.py`
 - `docs/agent-platform-architecture.md`
 - `docs/agent-platform-migration-notes.md`
@@ -56,13 +58,14 @@ Current infrastructure ports:
 - `planning_agent_core/planning_agent_core/skills/__init__.py` now lazy-loads skill implementations to avoid environment-dependent imports when individual skill submodules are imported.
 - `tests/test_import_smoke.py` now covers the new agent-platform package.
 - `docs/refactoring-implementation-plan.md` references this platform milestone.
+- `planning_agent_core/planning_agent_core/models.py` now includes platform checkpoint/result records.
 
 ## Compatibility Risks
 
 - Some callers may have relied on importing skill classes directly from `planning_agent_core.skills`. Current repository tests only import `build_skill_registry` from that package root. If external callers require root-level skill class imports, add explicit lazy accessors or compatibility exports.
 - `PlanningAgent` can wrap the legacy planning service, but the existing planning workflow remains the richer production path until all planning skills are wired into the agent workflow.
 - `VerificationAgent` is intentionally conservative. Missing diffs or blocked coding attempts route to escalation rather than guessing.
-- In-memory checkpointing and result persistence are test defaults. Production persistence should be implemented behind the same protocols before enabling resumable multi-agent execution in production.
+- In-memory checkpointing and result persistence remain test defaults. PostgreSQL stores now exist, but production wiring still needs to inject them into runtime composition.
 - Agent config currently uses JSON loading. YAML can be added later if a dependency is acceptable.
 
 ## Migration Steps

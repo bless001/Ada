@@ -158,6 +158,7 @@ The general agent platform foundation has been added under `planning_agent_core/
 - Detailed architecture is documented in `docs/agent-platform-architecture.md`.
 - Migration notes are documented in `docs/agent-platform-migration-notes.md`.
 - Implementation results are recorded in `docs/agent-platform-implementation-results.md`.
+- PostgreSQL platform checkpoint/result persistence is recorded in `docs/agent-platform-postgres-persistence-results.md`.
 
 ## Phase 3: Persistence And Event Ingestion
 

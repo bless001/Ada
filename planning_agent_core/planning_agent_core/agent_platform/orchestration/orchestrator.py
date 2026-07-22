@@ -47,7 +47,7 @@ class AgentOrchestrator:
     ) -> None:
         self.factory = factory
         self.dependencies = dependencies or factory.dependencies
-        self.result_store = result_store or InMemoryAgentResultStore()
+        self.result_store = result_store or self.dependencies.result_store or InMemoryAgentResultStore()
 
     async def run_once(self, execution: AgentExecutionRequest) -> AgentOrchestrationResult:
         context = self._context(execution)
@@ -155,6 +155,8 @@ class AgentOrchestrator:
         category = _error_category(exc)
         return AgentResult(
             execution_id=execution.request.execution_id,
+            project_id=execution.request.project_id,
+            task_id=execution.request.task_id,
             agent_type=execution.agent_type,
             status=AgentRunStatus.FAILED,
             summary=f"{execution.agent_type} agent failed before completing.",

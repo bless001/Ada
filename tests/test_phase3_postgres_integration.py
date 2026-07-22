@@ -20,6 +20,8 @@ from planning_agent_core.domain.events import EventEnvelope
 from planning_agent_core.domain.repositories import RepositoryBinding
 from planning_agent_core.models import (
     AgentJob,
+    AgentPlatformCheckpointRecord,
+    AgentPlatformResultRecord,
     ApprovalRecord,
     CodingAttemptRecord,
     ExternalArtifact,
@@ -76,7 +78,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
     with psycopg.connect(_to_psycopg_url(migrated_postgres_url)) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
-            assert cur.fetchone()[0] == "0010_coding_attempts"
+            assert cur.fetchone()[0] == "0011_agent_platform_persistence"
 
             cur.execute(
                 """
@@ -86,6 +88,8 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                   AND table_name IN (
                       'pm_webhook_events',
                       'agent_jobs',
+                      'agent_platform_checkpoints',
+                      'agent_platform_results',
                       'agent_executions',
                       'approval_records',
                       'coding_attempts',
@@ -102,6 +106,8 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
             assert [row[0] for row in cur.fetchall()] == [
                 "agent_executions",
                 "agent_jobs",
+                "agent_platform_checkpoints",
+                "agent_platform_results",
                 "approval_records",
                 "coding_attempts",
                 "openproject_outbound_operations",
@@ -463,6 +469,80 @@ async def test_phase5_repository_analysis_service_binds_and_indexes_sample_proje
             assert summary.relationship_count >= 3
             assert {symbol.name for symbol in symbols} >= {"calculate_total", "checkout"}
             assert any("LSP analysis is unavailable" in warning for warning in summary.warnings)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_agent_platform_postgres_checkpoint_and_result_stores(
+    migrated_postgres_url: str,
+):
+    from planning_agent_core.agent_platform.agents.base import (
+        AgentNextAction,
+        AgentResult,
+        AgentRunStatus,
+    )
+    from planning_agent_core.agent_platform.runtime import CheckpointIdentity
+    from planning_agent_core.persistence.agent_platform import (
+        SqlAlchemyAgentCheckpointStore,
+        SqlAlchemyAgentResultStore,
+    )
+
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    try:
+        async with session_factory() as session:
+            project_key = f"platform-{uuid4()}"
+            execution_id = uuid4()
+            identity = CheckpointIdentity(
+                project_id=project_key,
+                workflow_id="workflow-platform-test",
+                agent_type="planning",
+                agent_instance_id="planning:default",
+                execution_id=execution_id,
+                thread_id=f"{project_key}:task.platform:planning",
+                checkpoint_id="checkpoint-1",
+            )
+            checkpoint_store = SqlAlchemyAgentCheckpointStore(session)
+            result_store = SqlAlchemyAgentResultStore(session)
+
+            assert await checkpoint_store.load(identity=identity) is None
+            assert await checkpoint_store.save(identity=identity, state={"phase": "created"}) == "checkpoint-1"
+            assert await checkpoint_store.save(identity=identity, state={"phase": "completed"}) == "checkpoint-1"
+            assert await checkpoint_store.load(identity=identity) == {"phase": "completed"}
+
+            persisted = await result_store.persist(
+                AgentResult(
+                    execution_id=execution_id,
+                    project_id=project_key,
+                    task_id="task.platform",
+                    agent_type="planning",
+                    status=AgentRunStatus.SUCCEEDED,
+                    summary="Planning completed.",
+                    next_action=AgentNextAction.RUN_CODING,
+                )
+            )
+            payload = await result_store.get_payload(persisted.result_id)
+
+            checkpoint_records = await session.scalars(
+                select(AgentPlatformCheckpointRecord).where(
+                    AgentPlatformCheckpointRecord.execution_id == execution_id
+                )
+            )
+            result_record = await session.scalar(
+                select(AgentPlatformResultRecord).where(
+                    AgentPlatformResultRecord.id == persisted.result_id
+                )
+            )
+
+            assert len(list(checkpoint_records)) == 1
+            assert result_record is not None
+            assert result_record.project_key == project_key
+            assert result_record.task_key == "task.platform"
+            assert result_record.status == AgentRunStatus.SUCCEEDED.value
+            assert payload is not None
+            assert payload["next_action"] == AgentNextAction.RUN_CODING.value
     finally:
         await engine.dispose()
 

@@ -86,6 +86,8 @@ class AgentRequest(BaseModel):
 
 class AgentResult(BaseModel):
     execution_id: UUID
+    project_id: str | None = None
+    task_id: str | None = None
     agent_type: str
     status: AgentRunStatus
     summary: str

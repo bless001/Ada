@@ -205,7 +205,11 @@ Checkpoint identity includes:
 - `thread_id`
 - `checkpoint_id`
 
-The current implementation includes `InMemoryCheckpointStore` for tests and local contract validation. PostgreSQL-backed LangGraph checkpointing remains available in the existing workflow package and can be adapted behind the same `CheckpointStore` protocol during infrastructure integration.
+The current implementation includes `InMemoryCheckpointStore` for tests and local contract validation. `SqlAlchemyAgentCheckpointStore` persists platform checkpoints in `agent_platform_checkpoints`.
+
+Agent results can be stored through `SqlAlchemyAgentResultStore`, which writes typed result payloads to `agent_platform_results`. The orchestrator uses `dependencies.result_store` when no explicit result store is supplied.
+
+PostgreSQL-backed LangGraph checkpointing remains available in the existing workflow package for internal LangGraph workflows and can be used inside each agent where needed.
 
 ## Adapters And Dependency Injection
 

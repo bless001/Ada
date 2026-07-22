@@ -80,6 +80,8 @@ class PlanningAgent(BaseAgent):
             state_ref = await self._save_state(context, state)
             return PlanningAgentResult(
                 execution_id=typed.execution_id,
+                project_id=typed.project_id,
+                task_id=typed.task_id,
                 status=AgentRunStatus.WAITING,
                 summary="Planning is waiting for clarification before decomposition.",
                 state=state_ref,
@@ -136,6 +138,8 @@ class PlanningAgent(BaseAgent):
             )
         return PlanningAgentResult(
             execution_id=typed.execution_id,
+            project_id=typed.project_id,
+            task_id=typed.task_id,
             status=status,
             summary=summary,
             output_artifacts=artifacts,

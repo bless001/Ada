@@ -13,6 +13,7 @@ Added a modular `agent_platform` package that generalizes the existing planning-
 - Lightweight `AgentOrchestrator` that creates context, emits lifecycle events, persists results, converts failures into structured results, and routes by `AgentNextAction`.
 - Runtime dependency container with protocol-typed adapter dependencies.
 - In-memory checkpoint store and event bus for tests and local execution.
+- PostgreSQL-backed checkpoint and result stores are available through `SqlAlchemyAgentCheckpointStore` and `SqlAlchemyAgentResultStore`.
 - Platform-facing adapter interfaces for LLM, Postgres repositories, Neo4j, Weaviate, OpenProject, Git/repository analysis, filesystem, and command execution.
 - Application-facing `AgentPlatformService` entry point for invoking registered agents through the orchestrator.
 - JSON configuration models, default config, loader, and example config.
@@ -46,7 +47,6 @@ Results:
 
 ## Remaining Follow-Up
 
-- Add PostgreSQL-backed platform result and checkpoint stores.
 - Wire new platform orchestrator into API/service entry points for production flows.
 - Expand internal LangGraph workflows inside each agent without coupling agents into one graph.
 - Add richer verification skills for acceptance matrix, regression risk, security/config review, and test adequacy.
