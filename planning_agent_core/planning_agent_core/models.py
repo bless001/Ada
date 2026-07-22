@@ -123,6 +123,46 @@ class RepositoryRelationshipRecord(Base):
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class CodingAttemptRecord(Base):
+    __tablename__ = "coding_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "repository_key",
+            "task_key",
+            "attempt_number",
+            name="uq_coding_attempts_project_task_attempt",
+        ),
+        CheckConstraint(
+            "status IN ('created', 'running', 'succeeded', 'failed', 'blocked', 'rolled_back')",
+            name="ck_coding_attempts_status",
+        ),
+        Index("idx_coding_attempts_project_task", "project_id", "task_key", "attempt_number"),
+        Index("idx_coding_attempts_project_status", "project_id", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    repository_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    task_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    base_commit_sha: Mapped[str | None] = mapped_column(String(80))
+    branch: Mapped[str | None] = mapped_column(String(200))
+    changed_files: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    command_results: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    evidence: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    rollback_plan: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    final_diff: Mapped[str | None] = mapped_column(Text)
+    error_summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
 class PlanningSession(Base):
     __tablename__ = "planning_sessions"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)

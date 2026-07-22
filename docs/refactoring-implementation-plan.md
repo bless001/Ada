@@ -145,6 +145,20 @@ Acceptance criteria:
 - Duplicate or malformed manifests fail with clear errors.
 - A planning graph can execute with fake skills and no external LLM.
 
+### Agent Platform Foundation Update
+
+The general agent platform foundation has been added under `planning_agent_core/planning_agent_core/agent_platform/`.
+
+- Common lifecycle and request/result contracts are in `agent_platform/agents/base/`.
+- Planning, coding, and verification agents now have independent config, state, workflow, request, and result modules.
+- Agent creation uses the registry-backed `AgentFactory`; default builders are registered without factory conditionals.
+- `AgentOrchestrator` coordinates lifecycle, persistence, structured events, approval gates, and high-level transitions without agent-specific business logic.
+- Platform adapter namespaces expose infrastructure-facing interfaces over the existing ports.
+- Example configuration is in `planning_agent_core/agent-platform.example.json`.
+- Detailed architecture is documented in `docs/agent-platform-architecture.md`.
+- Migration notes are documented in `docs/agent-platform-migration-notes.md`.
+- Implementation results are recorded in `docs/agent-platform-implementation-results.md`.
+
 ## Phase 3: Persistence And Event Ingestion
 
 Objective: unify webhook intake, queueing, leasing, retries, and workflow resume.

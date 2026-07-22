@@ -21,6 +21,7 @@ from planning_agent_core.domain.repositories import RepositoryBinding
 from planning_agent_core.models import (
     AgentJob,
     ApprovalRecord,
+    CodingAttemptRecord,
     ExternalArtifact,
     Project,
     RepositoryBindingRecord,
@@ -75,7 +76,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
     with psycopg.connect(_to_psycopg_url(migrated_postgres_url)) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
-            assert cur.fetchone()[0] == "0009_repository_index"
+            assert cur.fetchone()[0] == "0010_coding_attempts"
 
             cur.execute(
                 """
@@ -87,6 +88,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                       'agent_jobs',
                       'agent_executions',
                       'approval_records',
+                      'coding_attempts',
                       'openproject_outbound_operations',
                       'openproject_reconciliation_snapshots',
                       'pm_context_snapshots',
@@ -101,6 +103,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                 "agent_executions",
                 "agent_jobs",
                 "approval_records",
+                "coding_attempts",
                 "openproject_outbound_operations",
                 "openproject_reconciliation_snapshots",
                 "pm_context_snapshots",
@@ -129,6 +132,28 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                 "config_snapshot",
                 "error_summary",
             } <= execution_columns
+
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'coding_attempts'
+                """
+            )
+            coding_attempt_columns = {row[0] for row in cur.fetchall()}
+            assert {
+                "project_id",
+                "repository_key",
+                "task_key",
+                "attempt_number",
+                "status",
+                "changed_files",
+                "command_results",
+                "rollback_plan",
+                "final_diff",
+                "error_summary",
+            } <= coding_attempt_columns
 
 
 @pytest.mark.asyncio
@@ -438,6 +463,71 @@ async def test_phase5_repository_analysis_service_binds_and_indexes_sample_proje
             assert summary.relationship_count >= 3
             assert {symbol.name for symbol in symbols} >= {"calculate_total", "checkout"}
             assert any("LSP analysis is unavailable" in warning for warning in summary.warnings)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_phase7_coding_attempt_store_persists_attempt_result(
+    migrated_postgres_url: str,
+):
+    from planning_agent_core.domain.coding import CodingAttemptResult, RollbackPlan
+    from planning_agent_core.domain.enums import CodingAttemptStatus
+    from planning_agent_core.persistence.coding_attempts import SqlAlchemyCodingAttemptStore
+
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    try:
+        async with session_factory() as session:
+            project = Project(
+                project_key=f"phase7-coding-{uuid4()}",
+                name="Phase 7 Coding Attempt",
+            )
+            session.add(project)
+            await session.commit()
+            await session.refresh(project)
+
+            store = SqlAlchemyCodingAttemptStore(session)
+            attempt_number = await store.next_attempt_number(
+                project_id=project.id,
+                repository_key="sample-project",
+                task_key="task.sample",
+            )
+            assert attempt_number == 1
+
+            attempt_id = await store.record_result(
+                project_id=project.id,
+                result=CodingAttemptResult(
+                    task_key="task.sample",
+                    repository_key="sample-project",
+                    attempt_number=attempt_number,
+                    status=CodingAttemptStatus.SUCCEEDED,
+                    changed_files=["src/app.py"],
+                    final_diff="diff --git a/src/app.py b/src/app.py",
+                    rollback_plan=RollbackPlan(
+                        available=True,
+                        strategy="reverse_diff",
+                        changed_files=["src/app.py"],
+                        reverse_diff="diff --git a/src/app.py b/src/app.py",
+                    ),
+                ),
+            )
+
+            record = await session.scalar(
+                select(CodingAttemptRecord).where(CodingAttemptRecord.id == attempt_id)
+            )
+            assert record is not None
+            assert record.status == CodingAttemptStatus.SUCCEEDED.value
+            assert record.changed_files == ["src/app.py"]
+            assert record.rollback_plan["strategy"] == "reverse_diff"
+            assert (
+                await store.next_attempt_number(
+                    project_id=project.id,
+                    repository_key="sample-project",
+                    task_key="task.sample",
+                )
+            ) == 2
     finally:
         await engine.dispose()
 

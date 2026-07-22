@@ -1,0 +1,53 @@
+{
+  "llm": {
+    "base_url": "http://host.docker.internal:8080/v1",
+    "model": "local-coding-model",
+    "timeout_seconds": 180,
+    "context_window": 29696
+  },
+  "agents": {
+    "planning": {
+      "agent_type": "planning",
+      "enabled": true,
+      "implementation": "default",
+      "checkpoint_namespace": "planning",
+      "approval_required": true,
+      "settings": {
+        "require_plan_validation": true,
+        "allow_legacy_planning_service": true
+      }
+    },
+    "coding": {
+      "agent_type": "coding",
+      "enabled": true,
+      "implementation": "default",
+      "checkpoint_namespace": "coding",
+      "approval_required": false,
+      "settings": {
+        "workspace_strategy": "isolated",
+        "allowed_statuses": ["approved"]
+      }
+    },
+    "verification": {
+      "agent_type": "verification",
+      "enabled": true,
+      "implementation": "default",
+      "checkpoint_namespace": "verification",
+      "approval_required": false,
+      "settings": {
+        "independent_workspace": true,
+        "require_diff_for_pass": true
+      }
+    },
+    "security_review": {
+      "agent_type": "security_review",
+      "enabled": false,
+      "implementation": "default",
+      "checkpoint_namespace": "security_review",
+      "approval_required": false,
+      "settings": {
+        "severity_gate": "medium"
+      }
+    }
+  }
+}

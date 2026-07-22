@@ -104,3 +104,12 @@ class AgentExecutionStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class CodingAttemptStatus(StrEnum):
+    CREATED = "created"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    ROLLED_BACK = "rolled_back"
