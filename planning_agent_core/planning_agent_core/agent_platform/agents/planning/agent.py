@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from planning_agent_core.agent_platform.agents.base.agent import BaseAgent
 from planning_agent_core.agent_platform.agents.base.contracts import (
     AgentError,
@@ -48,7 +50,10 @@ class PlanningAgent(BaseAgent):
         self._initialized = True
 
     async def validate_request(self, request: AgentRequest) -> None:
-        typed = PlanningAgentRequest.model_validate(request.model_dump(mode="json"))
+        try:
+            typed = PlanningAgentRequest.model_validate(request.model_dump(mode="json"))
+        except ValidationError as exc:
+            raise AgentValidationError("PlanningAgent received an invalid planning request") from exc
         if typed.agent_type != self.agent_type:
             raise AgentValidationError("PlanningAgent only accepts planning requests")
         if not (typed.objective or typed.original_request or typed.plan or typed.session_id):

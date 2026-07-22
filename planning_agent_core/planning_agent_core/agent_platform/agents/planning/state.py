@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -21,7 +21,7 @@ class PlanningDocumentChunk(BaseModel):
 
 
 class PlanningAgentRequest(AgentRequest):
-    agent_type: str = "planning"
+    agent_type: Literal["planning"] = "planning"
     original_request: str | None = None
     document_chunks: list[PlanningDocumentChunk] = Field(default_factory=list)
     plan: ProjectPlanSpec | None = None
@@ -38,7 +38,7 @@ class PlanningAgentState(BaseModel):
 
 
 class PlanningAgentResult(AgentResult):
-    agent_type: str = "planning"
+    agent_type: Literal["planning"] = "planning"
     status: AgentRunStatus
     requirements: list[NormalizedRequirement] = Field(default_factory=list)
     plan: ProjectPlanSpec | None = None

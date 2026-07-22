@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -24,7 +25,7 @@ class VerificationFinding(BaseModel):
 
 
 class VerificationAgentRequest(AgentRequest):
-    agent_type: str = "verification"
+    agent_type: Literal["verification"] = "verification"
     acceptance_criteria: list[AcceptanceCriterionSpec] = Field(default_factory=list)
     coding_result: CodingAttemptResult | None = None
     repository_diff: str | None = None
@@ -38,7 +39,7 @@ class VerificationAgentState(BaseModel):
 
 
 class VerificationAgentResult(AgentResult):
-    agent_type: str = "verification"
+    agent_type: Literal["verification"] = "verification"
     status: AgentRunStatus
     verdict: VerificationVerdict
     findings: list[VerificationFinding] = Field(default_factory=list)

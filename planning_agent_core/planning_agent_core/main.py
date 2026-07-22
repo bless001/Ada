@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from planning_agent_core import models as _models  # noqa: F401
+from planning_agent_core.api.agents import router as agents_router
 from planning_agent_core.api.context import router as context_router
 from planning_agent_core.api.documents import router as documents_router
 from planning_agent_core.api.events import router as events_router
@@ -38,6 +39,7 @@ app = FastAPI(
 )
 
 app.include_router(projects_router)
+app.include_router(agents_router)
 app.include_router(documents_router)
 app.include_router(planning_router)
 app.include_router(provisioning_router)

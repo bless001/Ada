@@ -50,6 +50,8 @@ Important boundary rules:
 
 Application code can use `planning_agent_core/services/agent_platform_service.py` as the migration entry point for invoking the platform without directly constructing the factory and orchestrator.
 
+FastAPI exposes the platform through `POST /v1/agents/execute`. The route accepts a typed discriminated union of Planning, Coding, and Verification requests, creates request-scoped durable stores, and invokes `AgentPlatformService`.
+
 ## Common Agent Lifecycle
 
 All concrete agents implement `BaseAgent`:

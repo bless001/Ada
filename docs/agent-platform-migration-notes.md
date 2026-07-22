@@ -45,6 +45,7 @@ Current infrastructure ports:
 - `planning_agent_core/planning_agent_core/agent_platform/runtime/*`
 - `planning_agent_core/planning_agent_core/agent_platform/config/*`
 - `planning_agent_core/planning_agent_core/agent_platform/adapters/*`
+- `planning_agent_core/planning_agent_core/api/agents.py`
 - `planning_agent_core/planning_agent_core/services/agent_platform_service.py`
 - `planning_agent_core/planning_agent_core/persistence/agent_platform.py`
 - `planning_agent_core/agent-platform.example.json`
@@ -59,6 +60,7 @@ Current infrastructure ports:
 - `tests/test_import_smoke.py` now covers the new agent-platform package.
 - `docs/refactoring-implementation-plan.md` references this platform milestone.
 - `planning_agent_core/planning_agent_core/models.py` now includes platform checkpoint/result records.
+- `planning_agent_core/planning_agent_core/main.py` now includes the agents router.
 
 ## Compatibility Risks
 

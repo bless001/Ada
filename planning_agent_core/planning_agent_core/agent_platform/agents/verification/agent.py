@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from pydantic import ValidationError
+
 from planning_agent_core.agent_platform.agents.base.agent import BaseAgent
 from planning_agent_core.agent_platform.agents.base.contracts import (
     AgentError,
@@ -45,7 +47,10 @@ class VerificationAgent(BaseAgent):
         self._initialized = True
 
     async def validate_request(self, request: AgentRequest) -> None:
-        typed = VerificationAgentRequest.model_validate(request.model_dump(mode="json"))
+        try:
+            typed = VerificationAgentRequest.model_validate(request.model_dump(mode="json"))
+        except ValidationError as exc:
+            raise AgentValidationError("VerificationAgent received an invalid verification request") from exc
         if typed.agent_type != self.agent_type:
             raise AgentValidationError("VerificationAgent only accepts verification requests")
         if not typed.task_id:

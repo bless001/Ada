@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 from planning_agent_core.agent_platform.agents.base.contracts import AgentRequest, AgentResult, AgentRunStatus
@@ -7,7 +9,7 @@ from planning_agent_core.domain.coding import CodingAttemptRequest, CodingAttemp
 
 
 class CodingAgentRequest(AgentRequest):
-    agent_type: str = "coding"
+    agent_type: Literal["coding"] = "coding"
     coding_attempt: CodingAttemptRequest | None = None
     approved: bool = False
 
@@ -19,6 +21,6 @@ class CodingAgentState(BaseModel):
 
 
 class CodingAgentResult(AgentResult):
-    agent_type: str = "coding"
+    agent_type: Literal["coding"] = "coding"
     status: AgentRunStatus
     coding_result: CodingAttemptResult | None = None

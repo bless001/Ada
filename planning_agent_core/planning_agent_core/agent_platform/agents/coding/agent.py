@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from planning_agent_core.agent_platform.agents.base.agent import BaseAgent
 from planning_agent_core.agent_platform.agents.base.contracts import (
     AgentError,
@@ -37,7 +39,10 @@ class CodingAgent(BaseAgent):
         self._initialized = True
 
     async def validate_request(self, request: AgentRequest) -> None:
-        typed = CodingAgentRequest.model_validate(request.model_dump(mode="json"))
+        try:
+            typed = CodingAgentRequest.model_validate(request.model_dump(mode="json"))
+        except ValidationError as exc:
+            raise AgentValidationError("CodingAgent received an invalid coding request") from exc
         if typed.agent_type != self.agent_type:
             raise AgentValidationError("CodingAgent only accepts coding requests")
         if not typed.task_id:
