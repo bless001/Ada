@@ -17,6 +17,7 @@ Added a modular `agent_platform` package that generalizes the existing planning-
 - Platform-facing adapter interfaces for LLM, Postgres repositories, Neo4j, Weaviate, OpenProject, Git/repository analysis, filesystem, and command execution.
 - Application-facing `AgentPlatformService` entry point for invoking registered agents through the orchestrator.
 - FastAPI `POST /v1/agents/execute` entry point for typed platform agent execution.
+- OpenProject event orchestration now uses `AgentPlatformService` for resumable planning events when configured.
 - JSON configuration models, default config, loader, and example config.
 - Lazy `planning_agent_core.skills` package initialization so platform imports do not require LLM environment settings.
 - Contract, factory, orchestration, and checkpoint tests using fake dependencies.

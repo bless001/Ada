@@ -61,6 +61,7 @@ Current infrastructure ports:
 - `docs/refactoring-implementation-plan.md` references this platform milestone.
 - `planning_agent_core/planning_agent_core/models.py` now includes platform checkpoint/result records.
 - `planning_agent_core/planning_agent_core/main.py` now includes the agents router.
+- `planning_agent_core/planning_agent_core/application/project_orchestrator.py` can route resumable planning events through `AgentPlatformService`.
 
 ## Compatibility Risks
 
@@ -75,12 +76,13 @@ Current infrastructure ports:
 1. Keep existing API routes and services stable.
 2. Introduce platform construction in application composition using `create_default_agent_factory(dependencies)`.
 3. Wrap current planning requests in `PlanningAgentRequest` and invoke through `AgentOrchestrator.run_once` for new flows.
-4. Wrap approved coding attempts in `CodingAgentRequest` and invoke through the same orchestrator.
-5. Feed coding results and original acceptance criteria into `VerificationAgentRequest`.
-6. Replace in-memory result and checkpoint stores with PostgreSQL-backed implementations.
-7. Move OpenProject, Neo4j, Weaviate, and repository indexing triggers behind orchestrator-driven events.
-8. Add richer agent workflows internally without changing factory or orchestrator code.
-9. Retire legacy direct workflow entry points only after API and integration tests prove parity.
+4. Route persisted OpenProject planning feedback through `ProjectEventOrchestrator` with `agent_platform_service`.
+5. Wrap approved coding attempts in `CodingAgentRequest` and invoke through the same orchestrator.
+6. Feed coding results and original acceptance criteria into `VerificationAgentRequest`.
+7. Replace in-memory result and checkpoint stores with PostgreSQL-backed implementations.
+8. Move OpenProject, Neo4j, Weaviate, and repository indexing triggers behind orchestrator-driven events.
+9. Add richer agent workflows internally without changing factory or orchestrator code.
+10. Retire legacy direct workflow entry points only after API and integration tests prove parity.
 
 ## Example Flow
 

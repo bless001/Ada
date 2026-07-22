@@ -3,11 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from planning_agent_core.agent_platform.agents.base import AgentNextAction, AgentResult, AgentRunStatus
+from planning_agent_core.agent_platform.agents.planning import PlanningAgentRequest
+from planning_agent_core.agent_platform.config import load_agent_platform_config
+from planning_agent_core.agent_platform.orchestration import AgentExecutionRequest, AgentOrchestrationResult
 from planning_agent_core.application.openproject_approvals import (
     OpenProjectApprovalDecision,
     classify_openproject_approval,
@@ -24,7 +28,7 @@ from planning_agent_core.domain.enums import (
     PlanVersionStatus,
 )
 from planning_agent_core.domain.events import EventEnvelope
-from planning_agent_core.models import ExternalArtifact, PlanningSession, PlanVersion
+from planning_agent_core.models import ExternalArtifact, PlanningSession, PlanVersion, Project
 from planning_agent_core.persistence.approvals import SqlAlchemyApprovalRecordStore
 from planning_agent_core.ports.approvals import (
     ApprovalRecordInput,
@@ -81,19 +85,26 @@ class PlanningRunnerPort(Protocol):
         ...
 
 
+class AgentPlatformServicePort(Protocol):
+    async def execute(self, request: AgentExecutionRequest) -> AgentOrchestrationResult:
+        ...
+
+
 class ProjectEventOrchestrator:
     def __init__(
         self,
         *,
         db: AsyncSession,
         event_inbox: EventInboxPort,
-        planning_runner: PlanningRunnerPort,
+        planning_runner: PlanningRunnerPort | None = None,
+        agent_platform_service: AgentPlatformServicePort | None = None,
         execution_recorder: AgentExecutionRecorderPort | None = None,
         approval_store: ApprovalRecordStorePort | None = None,
     ) -> None:
         self.db = db
         self.event_inbox = event_inbox
         self.planning_runner = planning_runner
+        self.agent_platform_service = agent_platform_service
         self.execution_recorder = execution_recorder
         self.approval_store = approval_store
 
@@ -218,10 +229,18 @@ class ProjectEventOrchestrator:
                         else None
                     ),
                 },
-            )
+        )
 
         try:
-            workflow_result = await self.planning_runner.run(session.id)
+            workflow_result, agent_result = await self._resume_planning(
+                event_id=event_id,
+                envelope=envelope,
+                session=session,
+                project_id=project_id,
+                feedback=feedback,
+                approval_decision=approval_decision,
+                execution_id=execution.execution_id if execution else None,
+            )
         except Exception as exc:
             if execution is not None:
                 await self.execution_recorder.finish(
@@ -237,20 +256,81 @@ class ProjectEventOrchestrator:
         if execution is not None:
             await self.execution_recorder.finish(
                 execution.execution_id,
-                status=classify_workflow_completion(workflow_result),
+                status=(
+                    classify_agent_result_completion(agent_result)
+                    if agent_result is not None
+                    else classify_workflow_completion(workflow_result)
+                ),
             )
 
         return OrchestrationResult(
             event_id=event_id,
             action=OrchestrationAction.RESUME_PLANNING,
-            reason="Resumed the waiting planning workflow for the mapped project",
+            reason=(
+                "Resumed the waiting planning agent through the platform"
+                if agent_result is not None
+                else "Resumed the waiting planning workflow for the mapped project"
+            ),
             project_id=project_id,
             planning_session_id=session.id,
             thread_id=thread_id,
-            execution_id=execution.execution_id if execution else None,
+            execution_id=(
+                agent_result.execution_id
+                if agent_result is not None
+                else execution.execution_id
+                if execution
+                else None
+            ),
             workflow_result=workflow_result,
             approval_id=approval_id,
         )
+
+    async def _resume_planning(
+        self,
+        *,
+        event_id: str,
+        envelope: EventEnvelope,
+        session: PlanningSession,
+        project_id: UUID,
+        feedback: OpenProjectFeedbackClassification,
+        approval_decision: OpenProjectApprovalDecision | None,
+        execution_id: UUID | None,
+    ) -> tuple[dict[str, Any], AgentResult | None]:
+        if self.agent_platform_service is not None:
+            project_key = await self._project_key(project_id)
+            request = PlanningAgentRequest(
+                execution_id=execution_id or uuid4(),
+                project_id=project_key,
+                objective=session.original_request or "Resume planning from OpenProject feedback.",
+                original_request=session.original_request,
+                session_id=session.id,
+                metadata={
+                    "source_event_id": event_id,
+                    "event_source": envelope.source,
+                    "event_type": envelope.event_type,
+                    "feedback_intent": feedback.intent.value,
+                    "approval_scope": (
+                        approval_decision.approval_scope.value
+                        if approval_decision
+                        else None
+                    ),
+                },
+            )
+            platform_result = await self.agent_platform_service.execute(
+                AgentExecutionRequest(
+                    workflow_id=f"planning-session-{session.id}",
+                    agent_type="planning",
+                    request=request,
+                    config=load_agent_platform_config().agents["planning"],
+                    correlation_id=event_id,
+                )
+            )
+            return _platform_workflow_result(platform_result), platform_result.result
+
+        if self.planning_runner is None:
+            raise RuntimeError("No planning runner or agent platform service is configured")
+
+        return await self.planning_runner.run(session.id), None
 
     async def _resolve_openproject_mapping(
         self,
@@ -335,6 +415,12 @@ class ProjectEventOrchestrator:
             .limit(1)
         )
 
+    async def _project_key(self, project_id: UUID) -> str:
+        project = await self.db.scalar(select(Project).where(Project.id == project_id))
+        if project is None:
+            raise KeyError(f"Project not found: {project_id}")
+        return project.project_key
+
     async def _record_approval(
         self,
         *,
@@ -416,3 +502,35 @@ def classify_workflow_completion(workflow_result: dict[str, Any]) -> AgentExecut
         return AgentExecutionStatus.WAITING
 
     return AgentExecutionStatus.SUCCEEDED
+
+
+def classify_agent_result_completion(result: AgentResult) -> AgentExecutionStatus:
+    if result.next_action in {
+        AgentNextAction.REQUEST_APPROVAL,
+        AgentNextAction.REQUEST_CLARIFICATION,
+    }:
+        return AgentExecutionStatus.WAITING
+
+    if result.status in {AgentRunStatus.WAITING, AgentRunStatus.BLOCKED}:
+        return AgentExecutionStatus.WAITING
+
+    if result.status == AgentRunStatus.SUCCEEDED:
+        return AgentExecutionStatus.SUCCEEDED
+
+    return AgentExecutionStatus.FAILED
+
+
+def _platform_workflow_result(result: AgentOrchestrationResult) -> dict[str, Any]:
+    agent_payload = result.result.model_dump(mode="json")
+    return {
+        "platform": True,
+        "persisted_result_id": str(result.persisted.result_id),
+        "agent_result": agent_payload,
+        "route": result.route.model_dump(mode="json"),
+        "ambiguity_status": (
+            "needs_clarification"
+            if result.result.next_action == AgentNextAction.REQUEST_CLARIFICATION
+            else result.result.status.value
+        ),
+        "clarification_questions": agent_payload.get("clarification_questions", []),
+    }

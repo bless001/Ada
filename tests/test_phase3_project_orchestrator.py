@@ -7,7 +7,18 @@ from uuid import uuid4
 
 import pytest
 
+from planning_agent_core.agent_platform.agents.base import (
+    AgentNextAction,
+    AgentResult,
+    AgentRunStatus,
+)
+from planning_agent_core.agent_platform.orchestration import (
+    AgentOrchestrationResult,
+    AgentRouteDecision,
+    PersistedAgentResult,
+)
 from planning_agent_core.application.project_orchestrator import (
+    classify_agent_result_completion,
     classify_workflow_completion,
     OrchestrationAction,
     ProjectEventOrchestrator,
@@ -62,6 +73,40 @@ class FakeRunner:
         if self.error:
             raise self.error
         return self.result
+
+
+class FakeAgentPlatformService:
+    def __init__(
+        self,
+        *,
+        status: AgentRunStatus = AgentRunStatus.WAITING,
+        next_action: AgentNextAction = AgentNextAction.REQUEST_CLARIFICATION,
+    ):
+        self.status = status
+        self.next_action = next_action
+        self.calls: list[Any] = []
+
+    async def execute(self, request):
+        self.calls.append(request)
+        result = AgentResult(
+            execution_id=request.request.execution_id,
+            project_id=request.request.project_id,
+            task_id=request.request.task_id,
+            agent_type=request.agent_type,
+            status=self.status,
+            summary="Platform planning resumed.",
+            next_action=self.next_action,
+        )
+        return AgentOrchestrationResult(
+            result=result,
+            persisted=PersistedAgentResult(result=result),
+            route=AgentRouteDecision(
+                next_agent_type=None,
+                requires_approval=False,
+                escalate=self.next_action == AgentNextAction.REQUEST_CLARIFICATION,
+                reason="Platform route.",
+            ),
+        )
 
 
 class FakeExecutionRecorder:
@@ -130,6 +175,66 @@ async def test_project_orchestrator_resumes_waiting_planning_thread_from_event()
         ("get", "event-1"),
         ("processing", "event-1"),
         ("processed", "event-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_project_orchestrator_resumes_planning_through_agent_platform():
+    project_id = uuid4()
+    session_id = uuid4()
+    event_id = str(uuid4())
+    event = EventEnvelope(
+        source="openproject",
+        event_type="work_package.comment_created",
+        external_project_id="12",
+        external_comment_id="99",
+        payload={"action": "work_package.comment_created"},
+    )
+    inbox = FakeInbox(event=event, marks=[])
+    db = FakeDb(
+        SimpleNamespace(id=uuid4(), project_id=project_id),
+        SimpleNamespace(
+            id=session_id,
+            project_id=project_id,
+            original_request="Build the modular platform.",
+        ),
+        SimpleNamespace(id=project_id, project_key="demo-platform"),
+    )
+    platform = FakeAgentPlatformService()
+    recorder = FakeExecutionRecorder()
+    orchestrator = ProjectEventOrchestrator(
+        db=db,
+        event_inbox=inbox,
+        agent_platform_service=platform,
+        execution_recorder=recorder,
+    )
+
+    result = await orchestrator.handle_persisted_event(event_id)
+
+    assert result.action == OrchestrationAction.RESUME_PLANNING
+    assert result.reason == "Resumed the waiting planning agent through the platform"
+    assert result.project_id == project_id
+    assert result.planning_session_id == session_id
+    assert result.execution_id == recorder.execution_id
+    assert result.workflow_result is not None
+    assert result.workflow_result["platform"] is True
+    assert result.workflow_result["agent_result"]["project_id"] == "demo-platform"
+    assert result.workflow_result["ambiguity_status"] == "needs_clarification"
+
+    request = platform.calls[0]
+    assert request.agent_type == "planning"
+    assert request.workflow_id == f"planning-session-{session_id}"
+    assert request.correlation_id == event_id
+    assert request.request.execution_id == recorder.execution_id
+    assert request.request.project_id == "demo-platform"
+    assert request.request.session_id == session_id
+    assert request.request.metadata["source_event_id"] == event_id
+
+    assert recorder.finish_calls == [
+        {
+            "execution_id": recorder.execution_id,
+            "status": AgentExecutionStatus.WAITING,
+        }
     ]
 
 
@@ -433,3 +538,32 @@ def test_classify_workflow_completion_marks_waiting_for_clarification():
     assert classify_workflow_completion({"clarification_questions": [{"question": "Why?"}]}) == (
         AgentExecutionStatus.WAITING
     )
+
+
+def test_classify_agent_result_completion_maps_platform_statuses():
+    assert classify_agent_result_completion(
+        AgentResult(
+            execution_id=uuid4(),
+            agent_type="planning",
+            status=AgentRunStatus.SUCCEEDED,
+            summary="Done.",
+            next_action=AgentNextAction.RUN_CODING,
+        )
+    ) == AgentExecutionStatus.SUCCEEDED
+    assert classify_agent_result_completion(
+        AgentResult(
+            execution_id=uuid4(),
+            agent_type="planning",
+            status=AgentRunStatus.SUCCEEDED,
+            summary="Waiting.",
+            next_action=AgentNextAction.REQUEST_APPROVAL,
+        )
+    ) == AgentExecutionStatus.WAITING
+    assert classify_agent_result_completion(
+        AgentResult(
+            execution_id=uuid4(),
+            agent_type="planning",
+            status=AgentRunStatus.FAILED,
+            summary="Failed.",
+        )
+    ) == AgentExecutionStatus.FAILED

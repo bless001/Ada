@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -125,3 +126,44 @@ async def test_execute_agent_rejects_mismatched_config(monkeypatch):
 
     assert exc.value.status_code == 422
     assert "config.agent_type" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_event_orchestrate_endpoint_uses_agent_platform_service(monkeypatch):
+    from planning_agent_core.api.events import orchestrate_event
+
+    captured = {}
+    fake_service = object()
+
+    class FakeProjectEventOrchestrator:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def handle_persisted_event(self, event_id: str):
+            captured["event_id"] = event_id
+            return SimpleNamespace(as_dict=lambda: {"event_id": event_id, "ok": True})
+
+    monkeypatch.setattr(
+        "planning_agent_core.api.events.create_agent_platform_service_for_db",
+        lambda db: fake_service,
+    )
+    monkeypatch.setattr(
+        "planning_agent_core.api.events.SqlAlchemyEventInbox",
+        lambda db: "inbox",
+    )
+    monkeypatch.setattr(
+        "planning_agent_core.api.events.SqlAlchemyAgentExecutionRecorder",
+        lambda db: "recorder",
+    )
+    monkeypatch.setattr(
+        "planning_agent_core.api.events.ProjectEventOrchestrator",
+        FakeProjectEventOrchestrator,
+    )
+
+    response = await orchestrate_event("event-1", db=object())
+
+    assert response == {"event_id": "event-1", "ok": True}
+    assert captured["event_inbox"] == "inbox"
+    assert captured["execution_recorder"] == "recorder"
+    assert captured["agent_platform_service"] is fake_service
+    assert "planning_runner" not in captured

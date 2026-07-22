@@ -46,6 +46,7 @@ Baseline date: 2026-07-21
 ## Runtime Compatibility Notes
 
 - `infra/agent_trigger` remains a standalone service, but its Docker image now copies the shared core package for parser and retry-policy imports.
+- Update 2026-07-23: `ProjectEventOrchestrator` can now route resumable planning events through `AgentPlatformService` when configured; the original `PlanningWorkflowRunner` path remains a fallback for compatibility.
 - The live trigger worker still uses synchronous `psycopg` only for queue lease and compatibility job bookkeeping.
 - Duplicate delivery safety is now enforced in both the core inbox adapter and the live trigger storage path.
 - Worker lease and retry behavior is now durable in `agent_jobs`.

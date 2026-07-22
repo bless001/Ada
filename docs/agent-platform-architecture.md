@@ -52,6 +52,8 @@ Application code can use `planning_agent_core/services/agent_platform_service.py
 
 FastAPI exposes the platform through `POST /v1/agents/execute`. The route accepts a typed discriminated union of Planning, Coding, and Verification requests, creates request-scoped durable stores, and invokes `AgentPlatformService`.
 
+OpenProject event orchestration uses the same service for resumable planning events. `ProjectEventOrchestrator` builds a typed `PlanningAgentRequest` from the persisted event and waiting planning session, then invokes the platform orchestrator instead of directly calling the planning workflow runner when `agent_platform_service` is configured.
+
 ## Common Agent Lifecycle
 
 All concrete agents implement `BaseAgent`:
