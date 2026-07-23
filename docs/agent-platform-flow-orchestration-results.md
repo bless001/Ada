@@ -75,5 +75,5 @@ Results:
 
 - Ruff: passed.
 - Focused persistence, API, and flow tests: 23 passed.
-- Full test suite with PostgreSQL integrations enabled: 173 passed, 2 skipped, 4 existing
+- Full test suite with PostgreSQL integrations enabled: 183 passed, 2 skipped, 4 existing
   warnings.

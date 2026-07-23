@@ -1,6 +1,10 @@
-from planning_agent_core.agent_platform.config.loader import load_agent_platform_config, load_agent_platform_config_from_mapping
+from planning_agent_core.agent_platform.config.loader import (
+    load_agent_platform_config,
+    load_agent_platform_config_from_mapping,
+)
 from planning_agent_core.agent_platform.config.models import (
     AgentConfig,
+    AgentFlowRuntimeConfig,
     AgentPlatformConfig,
     DEFAULT_AGENT_PLATFORM_CONFIG,
     LLMEndpointConfig,
@@ -9,6 +13,7 @@ from planning_agent_core.agent_platform.config.models import (
 
 __all__ = [
     "AgentConfig",
+    "AgentFlowRuntimeConfig",
     "AgentPlatformConfig",
     "DEFAULT_AGENT_PLATFORM_CONFIG",
     "LLMEndpointConfig",

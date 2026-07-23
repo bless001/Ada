@@ -54,7 +54,10 @@ FastAPI exposes one-step compatibility execution through `POST /v1/agents/execut
 multi-agent flows use:
 
 - `POST /v1/agents/flows` to reserve and execute a new flow.
+- `GET /v1/agents/flows/by-workflow` to discover a flow after a failed start response.
 - `GET /v1/agents/flows/{flow_id}` to inspect its aggregate state and audit history.
+- `POST /v1/agents/flows/{flow_id}/heartbeat` to extend an active running lease.
+- `POST /v1/agents/flows/{flow_id}/recover` to claim and replay an expired running execution.
 - `POST /v1/agents/flows/{flow_id}/resume` to record approval evidence or supply the next typed
   request.
 
@@ -111,9 +114,9 @@ The one-step orchestrator accepts `AgentExecutionRequest` and returns `AgentOrch
 It preserves specialized subclass payloads using Pydantic `SerializeAsAny` while still enforcing
 the common base contract. `AgentFlowOrchestrator` composes these one-step runs into a bounded flow
 and returns `AgentFlowResult` with the complete step history and final pause or completion status.
-Durable flow boundaries use `PersistedAgentFlow`, `AgentFlowStepRecord`, and
-`AgentFlowApproval`. Raw request/result payloads are stored only as audit and recovery data; agents
-still communicate through typed contracts.
+Durable flow boundaries use `PersistedAgentFlow`, `AgentFlowStepRecord`, `AgentFlowApproval`,
+`AgentFlowLease`, and `AgentFlowRecoveryRecord`. Raw request/result payloads are stored only as
+audit and recovery data; agents still communicate through typed contracts.
 
 ## Agent Responsibilities
 
@@ -237,6 +240,12 @@ reserves the aggregate before invoking an agent and commits the resulting step h
 `start_flow` requires persistence and returns the durable snapshot. `resume_flow` claims the
 expected aggregate version before running the next typed request.
 
+Every running claim has a unique lease token, owner, acquisition time, and expiry. Completion must
+present the current token and aggregate version. Heartbeat extends the same token without changing
+the version. Recovery is permitted only after lease expiry, requires an exact replay of the
+persisted typed execution request, replaces the token, increments the version, and records both
+leases in append-only recovery history. A stale worker can therefore no longer commit.
+
 Approval is data, not an implicit flag. A flow waiting for approval requires an
 `AgentFlowApproval` containing a decision and stable external reference. Approved flows require a
 typed continuation request. `changes_requested` and `cancelled` decisions close the current flow
@@ -266,15 +275,21 @@ The current implementation includes `InMemoryCheckpointStore` for tests and loca
 Agent results can be stored through `SqlAlchemyAgentResultStore`, which writes typed result payloads to `agent_platform_results`. The orchestrator uses `dependencies.result_store` when no explicit result store is supplied.
 
 `SqlAlchemyAgentFlowStore` writes the aggregate to `agent_platform_flows`. Each mutation locks the
-row, checks the caller's expected version, and increments the version. The JSONB payload preserves
-the complete step and approval history, while relational columns index status, current execution,
-pending action, pending agent, approval state, correlation, and resume count. A unique
+row and checks the caller's expected version. Claims and completions increment the version;
+heartbeat only extends the current token. The JSONB payload preserves
+the complete step, approval, lease, and recovery history, while relational columns index status,
+current execution, pending action, pending agent, approval state, correlation, resume count,
+recovery count, lease identity, owner, and expiry. A unique
 `(project_key, workflow_id)` constraint prevents duplicate flow creation.
 
 Flow and agent checkpoints remain separate. A flow record coordinates high-level transitions; it
 does not replace agent-specific checkpoint namespaces or long-term project memory. If agent
 execution raises after reservation, the running aggregate retains the pending typed request for
 diagnosis and recovery instead of losing execution identity.
+
+Migration `0013_agent_flow_recovery_leases` marks legacy running rows as immediately expired and
+recoverable. Paused and completed rows remain unleased. Database reads merge the indexed lease
+columns into legacy JSON aggregates until the next aggregate write normalizes the JSON payload.
 
 PostgreSQL-backed LangGraph checkpointing remains available in the existing workflow package for internal LangGraph workflows and can be used inside each agent where needed.
 
@@ -309,6 +324,7 @@ The platform configuration is represented by:
 
 - `AgentConfig`
 - `AgentPlatformConfig`
+- `AgentFlowRuntimeConfig`
 - `LLMEndpointConfig`
 
 The loader accepts JSON and returns a deep copy of the default config when no path is provided. Example configuration is in `planning_agent_core/agent-platform.example.json`.
@@ -321,6 +337,14 @@ The LLM endpoint remains configurable by:
 - `context_window`
 
 No llama.cpp endpoint is hard-coded.
+
+Flow runtime configuration controls:
+
+- `lease_seconds`
+- `recovery_enabled`
+
+For synchronous API execution, `lease_seconds` must exceed the longest expected run. An external
+worker that owns a long-running claim should heartbeat before expiry.
 
 ## Observability
 
@@ -351,6 +375,8 @@ The new platform test suite covers:
   retry limits, and cross-workflow handoff rejection.
 - Durable reserve/complete transitions, append-only step numbering, audited approval resume and
   rejection, optimistic version conflicts, and pending-request preservation on execution failure.
+- Active-lease takeover rejection, heartbeat renewal without version churn, exact-request recovery,
+  stale-token completion rejection, recovery-disable configuration, and workflow discovery.
 - Production transition resolution from persisted tasks, approvals, context capsules, coding
   checkpoints, and coding results.
 - Live PostgreSQL flow persistence, JSONB reloading, indexed aggregate fields, and migration-head

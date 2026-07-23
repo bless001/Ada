@@ -2,7 +2,9 @@
 
 ## Summary
 
-Added an application API entry point for executing registered platform agents through the orchestrator. The route preserves the existing FastAPI application style and uses typed request models at the HTTP boundary.
+Added application API entry points for one-step execution and durable flow operation through the
+orchestrator. The routes preserve the existing FastAPI application style and use typed request
+models at the HTTP boundary.
 
 ## Implemented
 
@@ -15,11 +17,22 @@ Added an application API entry point for executing registered platform agents th
 - The endpoint builds `AgentPlatformService` with request-scoped SQLAlchemy-backed checkpoint and result stores.
 - Request/result models now use literal agent types for strong API discrimination.
 - Agent validation wraps Pydantic validation failures in `AgentValidationError` to preserve the platform error contract.
+- Added durable flow start, lookup, approval/resume, workflow discovery, heartbeat, and expired-run
+  recovery routes.
+- Flow version and lease conflicts map to HTTP `409`.
+- Recovery reuses persisted workflow, correlation, and configuration identity and requires the
+  original typed request.
 
 ## Endpoint
 
 ```http
 POST /v1/agents/execute
+POST /v1/agents/flows
+GET  /v1/agents/flows/by-workflow
+GET  /v1/agents/flows/{flow_id}
+POST /v1/agents/flows/{flow_id}/heartbeat
+POST /v1/agents/flows/{flow_id}/recover
+POST /v1/agents/flows/{flow_id}/resume
 ```
 
 Example planning payload:
@@ -70,12 +83,12 @@ Commands run:
 
 Results:
 
-- API/platform/import tests: 18 passed.
+- Focused flow, API, and platform tests: 47 passed.
 - Ruff: passed.
-- Full test suite: 131 passed, 11 skipped, 4 existing warnings.
+- Full test suite with PostgreSQL integrations enabled: 183 passed, 2 skipped, 4 existing
+  warnings.
 
 ## Remaining Follow-Up
 
 - Add authenticated/authorized production usage once user-management or gateway policy exists outside this project.
-- Wire OpenProject worker transitions to call `AgentPlatformService` instead of direct planning-only orchestration.
 - Add production composition for external adapters such as Neo4j, Weaviate, OpenProject, repository filesystem, and command runner secrets.

@@ -16,6 +16,7 @@ from planning_agent_core.agent_platform.agents.planning import PlanningAgentRequ
 from planning_agent_core.agent_platform.config import AgentConfig
 from planning_agent_core.agent_platform.orchestration import (
     AgentFlowApproval,
+    AgentFlowLeaseConflictError,
     AgentFlowVersionConflictError,
     AgentOrchestrationResult,
     AgentRouteDecision,
@@ -23,10 +24,16 @@ from planning_agent_core.agent_platform.orchestration import (
 )
 from planning_agent_core.api.agents import (
     AgentExecutePayload,
+    AgentFlowHeartbeatPayload,
+    AgentFlowRecoveryPayload,
     AgentFlowResumePayload,
     AgentFlowStartPayload,
     create_agent_platform_service_for_db,
     execute_agent,
+    get_agent_flow_by_workflow,
+    heartbeat_agent_flow,
+    recover_agent_flow,
+    router,
     resume_agent_flow,
     start_agent_flow,
 )
@@ -71,6 +78,12 @@ class FakeFlowService:
         self.current = SimpleNamespace(
             workflow_id="stored-workflow",
             correlation_id="stored-correlation",
+            pending_execution_payload={
+                "config": AgentConfig(
+                    agent_type="planning",
+                    checkpoint_namespace="planning",
+                ).model_dump(mode="json")
+            },
         )
 
     async def start_flow(self, execution, **kwargs):
@@ -81,9 +94,32 @@ class FakeFlowService:
         self.calls.append(("get", flow_id))
         return self.current
 
+    async def get_flow_by_workflow(self, **kwargs):
+        self.calls.append(("get_by_workflow", kwargs))
+        return self.current
+
+    async def heartbeat_flow(self, **kwargs):
+        self.calls.append(("heartbeat", kwargs))
+        return "heartbeat"
+
+    async def recover_flow(self, **kwargs):
+        self.calls.append(("recover", kwargs))
+        return "recovered"
+
     async def resume_flow(self, **kwargs):
         self.calls.append(("resume", kwargs))
         return "resumed"
+
+
+def test_agent_flow_operational_routes_are_registered_before_dynamic_lookup():
+    paths = [route.path for route in router.routes]
+
+    assert "/v1/agents/flows/by-workflow" in paths
+    assert "/v1/agents/flows/{flow_id}/heartbeat" in paths
+    assert "/v1/agents/flows/{flow_id}/recover" in paths
+    assert paths.index("/v1/agents/flows/by-workflow") < paths.index(
+        "/v1/agents/flows/{flow_id}"
+    )
 
 
 def test_agent_execute_payload_discriminates_coding_request():
@@ -268,6 +304,115 @@ async def test_start_agent_flow_maps_version_conflict_to_http_409(monkeypatch):
 
     assert exc.value.status_code == 409
     assert exc.value.detail == "workflow already exists"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_flow_by_workflow_uses_project_identity(monkeypatch):
+    fake_service = FakeFlowService()
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: fake_service,
+    )
+
+    response = await get_agent_flow_by_workflow(
+        project_id="demo",
+        workflow_id="stored-workflow",
+        db=object(),
+    )
+
+    assert response is fake_service.current
+    assert fake_service.calls[-1] == (
+        "get_by_workflow",
+        {"project_id": "demo", "workflow_id": "stored-workflow"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_agent_flow_passes_lease_claim(monkeypatch):
+    fake_service = FakeFlowService()
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: fake_service,
+    )
+    flow_id = uuid4()
+    lease_id = uuid4()
+
+    response = await heartbeat_agent_flow(
+        flow_id,
+        AgentFlowHeartbeatPayload(
+            expected_version=3,
+            lease_id=lease_id,
+        ),
+        db=object(),
+    )
+
+    assert response == "heartbeat"
+    _, kwargs = fake_service.calls[-1]
+    assert kwargs == {
+        "flow_id": flow_id,
+        "lease_id": lease_id,
+        "expected_version": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_recover_agent_flow_reuses_persisted_config_and_identity(monkeypatch):
+    fake_service = FakeFlowService()
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: fake_service,
+    )
+    flow_id = uuid4()
+    execution_id = uuid4()
+    payload = AgentFlowRecoveryPayload(
+        expected_version=1,
+        recovered_by="operator-api",
+        request=PlanningAgentRequest(
+            execution_id=execution_id,
+            project_id="demo",
+            objective="Recover exact planning execution.",
+        ),
+        max_steps=2,
+    )
+
+    response = await recover_agent_flow(flow_id, payload, db=object())
+
+    assert response == "recovered"
+    _, kwargs = fake_service.calls[-1]
+    assert kwargs["flow_id"] == flow_id
+    assert kwargs["expected_version"] == 1
+    assert kwargs["recovered_by"] == "operator-api"
+    assert kwargs["request"].workflow_id == "stored-workflow"
+    assert kwargs["request"].correlation_id == "stored-correlation"
+    assert kwargs["request"].request.execution_id == execution_id
+    assert kwargs["request"].config.checkpoint_namespace == "planning"
+    assert kwargs["max_steps"] == 2
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_maps_active_lease_conflict_to_http_409(monkeypatch):
+    class ConflictingLeaseService:
+        async def heartbeat_flow(self, **kwargs):
+            del kwargs
+            raise AgentFlowLeaseConflictError("lease token does not match")
+
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: ConflictingLeaseService(),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await heartbeat_agent_flow(
+            uuid4(),
+            AgentFlowHeartbeatPayload(
+                expected_version=1,
+                lease_id=uuid4(),
+            ),
+            db=object(),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "lease token does not match"
 
 
 @pytest.mark.asyncio

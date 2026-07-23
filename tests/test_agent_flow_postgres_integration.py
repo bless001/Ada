@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 import os
 import subprocess
 import sys
@@ -151,6 +152,7 @@ async def test_postgres_flow_store_persists_versioned_resume_history(
                     requires_approval=True,
                 ),
                 expected_version=reserved.version,
+                lease_id=reserved.lease.lease_id,
             )
 
             approval = AgentFlowApproval(
@@ -177,6 +179,7 @@ async def test_postgres_flow_store_persists_versioned_resume_history(
                     next_action=AgentNextAction.COMPLETE,
                 ),
                 expected_version=resumed.version,
+                lease_id=resumed.lease.lease_id,
             )
 
             reloaded = await store.get(completed.flow_id)
@@ -199,6 +202,7 @@ async def test_postgres_flow_store_persists_versioned_resume_history(
             assert record.current_agent_type == "coding"
             assert record.pending_agent_type is None
             assert record.requires_approval is False
+            assert record.lease_id is None
             assert record.last_approval_decision == ApprovalDecision.APPROVED.value
 
             with pytest.raises(
@@ -211,5 +215,59 @@ async def test_postgres_flow_store_persists_versioned_resume_history(
                     expected_version=2,
                 )
             assert session.in_transaction() is False
+
+            recovery_execution = _execution(
+                "planning",
+                project_id=project_id,
+                workflow_id=f"{workflow_id}-recovery",
+            )
+            recovery_reserved = await store.reserve(
+                recovery_execution,
+                lease_owner="postgres-worker-1",
+                lease_seconds=60,
+            )
+            heartbeat_at = recovery_reserved.lease.acquired_at + timedelta(seconds=30)
+            heartbeat = await store.renew_lease(
+                flow_id=recovery_reserved.flow_id,
+                lease_id=recovery_reserved.lease.lease_id,
+                expected_version=recovery_reserved.version,
+                lease_seconds=120,
+                now=heartbeat_at,
+            )
+            recovered = await store.claim_recovery(
+                flow_id=heartbeat.flow_id,
+                execution=recovery_execution,
+                expected_version=heartbeat.version,
+                recovered_by="postgres-worker-2",
+                lease_seconds=300,
+                now=heartbeat.lease.expires_at,
+            )
+            recovery_completed = await store.complete_run(
+                flow_id=recovered.flow_id,
+                result=_flow_result(
+                    recovery_execution,
+                    status=AgentFlowStatus.COMPLETED,
+                    next_action=AgentNextAction.COMPLETE,
+                ),
+                expected_version=recovered.version,
+                lease_id=recovered.lease.lease_id,
+            )
+
+            assert recovery_completed.version == 3
+            assert recovery_completed.recovery_count == 1
+            assert recovery_completed.lease is None
+            by_workflow = await store.get_by_workflow(
+                project_id=project_id,
+                workflow_id=recovery_execution.workflow_id,
+            )
+            assert by_workflow == recovery_completed
+
+            recovery_record = await session.get(
+                AgentPlatformFlowRecord,
+                recovery_completed.flow_id,
+            )
+            assert recovery_record is not None
+            assert recovery_record.recovery_count == 1
+            assert recovery_record.lease_id is None
     finally:
         await engine.dispose()

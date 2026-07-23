@@ -32,6 +32,8 @@ class AgentPlatformService:
         orchestrator: AgentOrchestrator | None = None,
         transition_resolver: AgentTransitionRequestResolver | None = None,
         flow_store: AgentFlowStore | None = None,
+        flow_lease_seconds: int = 300,
+        flow_recovery_enabled: bool = True,
     ) -> None:
         self.dependencies = dependencies
         self.factory = factory or create_default_agent_factory(dependencies)
@@ -41,6 +43,8 @@ class AgentPlatformService:
         )
         self.transition_resolver = transition_resolver
         self.flow_store = flow_store
+        self.flow_lease_seconds = flow_lease_seconds
+        self.flow_recovery_enabled = flow_recovery_enabled
 
     async def execute(self, request: AgentExecutionRequest) -> AgentOrchestrationResult:
         return await self.orchestrator.run_once(request)
@@ -55,7 +59,13 @@ class AgentPlatformService:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
         reservation = (
-            await self.flow_store.reserve(request) if self.flow_store is not None else None
+            await self.flow_store.reserve(
+                request,
+                lease_owner=_lease_owner("start", request),
+                lease_seconds=self.flow_lease_seconds,
+            )
+            if self.flow_store is not None
+            else None
         )
         flow_orchestrator = AgentFlowOrchestrator(
             step_orchestrator=self.orchestrator,
@@ -70,6 +80,7 @@ class AgentPlatformService:
             flow_id=reservation.flow_id,
             result=result,
             expected_version=reservation.version,
+            lease_id=_active_lease_id(reservation),
         )
         return result.model_copy(
             update={
@@ -103,6 +114,21 @@ class AgentPlatformService:
         snapshot = await self.flow_store.get(flow_id)
         if snapshot is None:
             raise AgentFlowNotFoundError(f"Agent flow not found: {flow_id}")
+        return snapshot
+
+    async def get_flow_by_workflow(
+        self,
+        *,
+        project_id: str,
+        workflow_id: str,
+    ) -> PersistedAgentFlow:
+        self._require_flow_store()
+        snapshot = await self.flow_store.get_by_workflow(
+            project_id=project_id,
+            workflow_id=workflow_id,
+        )
+        if snapshot is None:
+            raise AgentFlowNotFoundError(f"Agent flow not found for workflow: {workflow_id}")
         return snapshot
 
     async def resume_flow(
@@ -150,6 +176,8 @@ class AgentPlatformService:
             execution=request,
             expected_version=expected_version,
             approval=approval,
+            lease_owner=_lease_owner("resume", request),
+            lease_seconds=self.flow_lease_seconds,
         )
         flow_orchestrator = AgentFlowOrchestrator(
             step_orchestrator=self.orchestrator,
@@ -162,6 +190,60 @@ class AgentPlatformService:
             flow_id=flow_id,
             result=result,
             expected_version=reservation.version,
+            lease_id=_active_lease_id(reservation),
+        )
+
+    async def heartbeat_flow(
+        self,
+        *,
+        flow_id: UUID,
+        lease_id: UUID,
+        expected_version: int,
+    ) -> PersistedAgentFlow:
+        self._require_flow_store()
+        return await self.flow_store.renew_lease(
+            flow_id=flow_id,
+            lease_id=lease_id,
+            expected_version=expected_version,
+            lease_seconds=self.flow_lease_seconds,
+        )
+
+    async def recover_flow(
+        self,
+        *,
+        flow_id: UUID,
+        expected_version: int,
+        request: AgentExecutionRequest,
+        recovered_by: str,
+        transition_resolver: AgentTransitionRequestResolver | None = None,
+        max_steps: int = 10,
+    ) -> PersistedAgentFlow:
+        self._require_flow_store()
+        if not self.flow_recovery_enabled:
+            raise AgentValidationError("Agent flow recovery is disabled")
+        if max_steps < 1:
+            raise ValueError("max_steps must be at least 1")
+        current = await self.get_flow(flow_id)
+        _validate_recovery_request(current, request)
+        reservation = await self.flow_store.claim_recovery(
+            flow_id=flow_id,
+            execution=request,
+            expected_version=expected_version,
+            recovered_by=recovered_by,
+            lease_seconds=self.flow_lease_seconds,
+        )
+        flow_orchestrator = AgentFlowOrchestrator(
+            step_orchestrator=self.orchestrator,
+            transition_resolver=(
+                transition_resolver if transition_resolver is not None else self.transition_resolver
+            ),
+        )
+        result = await flow_orchestrator.run(request, max_steps=max_steps)
+        return await self.flow_store.complete_run(
+            flow_id=flow_id,
+            result=result,
+            expected_version=reservation.version,
+            lease_id=_active_lease_id(reservation),
         )
 
     def _require_flow_store(self) -> None:
@@ -174,11 +256,15 @@ def create_agent_platform_service(
     *,
     transition_resolver: AgentTransitionRequestResolver | None = None,
     flow_store: AgentFlowStore | None = None,
+    flow_lease_seconds: int = 300,
+    flow_recovery_enabled: bool = True,
 ) -> AgentPlatformService:
     return AgentPlatformService(
         dependencies=dependencies or AgentDependencyContainer(),
         transition_resolver=transition_resolver,
         flow_store=flow_store,
+        flow_lease_seconds=flow_lease_seconds,
+        flow_recovery_enabled=flow_recovery_enabled,
     )
 
 
@@ -207,3 +293,28 @@ def _validate_resume_request(
     )
     if expected_agent_type and request.agent_type != expected_agent_type:
         raise AgentValidationError(f"Resume request must target agent: {expected_agent_type}")
+
+
+def _validate_recovery_request(
+    flow: PersistedAgentFlow,
+    request: AgentExecutionRequest,
+) -> None:
+    if flow.status != AgentFlowStatus.RUNNING:
+        raise AgentValidationError(f"Agent flow cannot recover from status: {flow.status.value}")
+    if flow.pending_execution_payload is None:
+        raise AgentValidationError("Running flow has no pending execution payload")
+    _validate_resume_request(flow, request)
+    if request.model_dump(mode="json") != flow.pending_execution_payload:
+        raise AgentValidationError(
+            "Recovery request must exactly match the pending execution payload"
+        )
+
+
+def _lease_owner(prefix: str, request: AgentExecutionRequest) -> str:
+    return f"{prefix}:{request.agent_type}:{request.request.execution_id}"
+
+
+def _active_lease_id(flow: PersistedAgentFlow) -> UUID:
+    if flow.lease is None:
+        raise RuntimeError("Running agent flow does not have an active lease")
+    return flow.lease.lease_id

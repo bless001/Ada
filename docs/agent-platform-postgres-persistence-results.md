@@ -14,6 +14,7 @@ to the existing `agent_executions` metadata table or requiring a project UUID fo
   execution recovery data.
 - Alembic migration `0011_agent_platform_persistence`.
 - Alembic migration `0012_agent_platform_flows`.
+- Alembic migration `0013_agent_flow_recovery_leases`.
 - SQLAlchemy checkpoint store implementing the platform `CheckpointStore` protocol.
 - SQLAlchemy result store implementing the platform `AgentResultStore` protocol.
 - Common `AgentResult` now carries typed `project_id` and `task_id` fields for durable indexing.
@@ -23,6 +24,8 @@ to the existing `agent_executions` metadata table or requiring a project UUID fo
 - Live Postgres integration coverage for checkpoint upsert/load and result persistence.
 - Live Postgres integration coverage for flow reservation, approval resume, append-only history,
   optimistic version conflicts, and indexed aggregate state.
+- Live Postgres integration coverage for heartbeat, expired-lease recovery, recovery history,
+  relational lease cleanup, and workflow lookup.
 
 ## Tables
 
@@ -59,6 +62,11 @@ to the existing `agent_executions` metadata table or requiring a project UUID fo
 - `requires_approval`
 - `correlation_id`
 - `resume_count`
+- `recovery_count`
+- `lease_id`
+- `lease_owner`
+- `lease_acquired_at`
+- `lease_expires_at`
 - `last_approval_decision`
 
 ## Validation
@@ -76,8 +84,8 @@ Results:
 
 - Flow store and migration focused tests against live PostgreSQL: 2 passed.
 - Ruff: passed.
-- Alembic heads: `0012_agent_platform_flows (head)`.
-- Full test suite with PostgreSQL integrations enabled: 173 passed, 2 skipped, 4 existing
+- Alembic heads: `0013_agent_flow_recovery_leases (head)`.
+- Full test suite with PostgreSQL integrations enabled: 183 passed, 2 skipped, 4 existing
   warnings.
 
 Live Postgres validation remains behind `PHASE3_POSTGRES_DATABASE_URL`, consistent with the existing integration test strategy.

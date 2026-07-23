@@ -167,6 +167,8 @@ The general agent platform foundation has been added under `planning_agent_core/
   `docs/agent-platform-transition-resolver-results.md`.
 - Durable aggregate flow persistence, approval, and typed resume are recorded in
   `docs/agent-platform-flow-persistence-results.md`.
+- Interrupted-flow leases, heartbeat, discovery, and exact-request recovery are recorded in
+  `docs/agent-platform-flow-recovery-results.md`.
 
 ## Phase 3: Persistence And Event Ingestion
 

@@ -29,15 +29,23 @@ class AgentConfig(BaseModel):
         return self
 
 
+class AgentFlowRuntimeConfig(BaseModel):
+    lease_seconds: int = Field(default=300, ge=1, le=86400)
+    recovery_enabled: bool = True
+
+
 class AgentPlatformConfig(BaseModel):
     agents: dict[str, AgentConfig]
     llm: LLMEndpointConfig = Field(default_factory=LLMEndpointConfig)
+    flow_runtime: AgentFlowRuntimeConfig = Field(default_factory=AgentFlowRuntimeConfig)
 
     @model_validator(mode="after")
     def agent_keys_must_match_agent_types(self) -> "AgentPlatformConfig":
         for key, config in self.agents.items():
             if key != config.agent_type:
-                raise ValueError(f"agent config key '{key}' does not match agent_type '{config.agent_type}'")
+                raise ValueError(
+                    f"agent config key '{key}' does not match agent_type '{config.agent_type}'"
+                )
         return self
 
 

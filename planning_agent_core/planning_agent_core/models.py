@@ -655,6 +655,11 @@ class AgentPlatformFlowRecord(Base):
             "current_execution_id",
             "updated_at",
         ),
+        Index(
+            "idx_agent_platform_flows_recoverable",
+            "status",
+            "lease_expires_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -681,6 +686,15 @@ class AgentPlatformFlowRecord(Base):
     )
     correlation_id: Mapped[str] = mapped_column(String(120), nullable=False)
     resume_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    recovery_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lease_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(160))
+    lease_acquired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     last_approval_decision: Mapped[str | None] = mapped_column(String(40))
     flow_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(

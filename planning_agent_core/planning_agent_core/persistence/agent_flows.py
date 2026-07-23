@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -15,12 +16,15 @@ from planning_agent_core.agent_platform.orchestration.flow import (
 )
 from planning_agent_core.agent_platform.orchestration.flow_persistence import (
     AgentFlowApproval,
+    AgentFlowLease,
     AgentFlowNotFoundError,
     AgentFlowVersionConflictError,
     PersistedAgentFlow,
     begin_resume_snapshot,
     close_flow_snapshot,
     complete_run_snapshot,
+    recover_flow_snapshot,
+    renew_flow_lease_snapshot,
     reserve_flow_snapshot,
 )
 from planning_agent_core.models import AgentPlatformFlowRecord
@@ -33,8 +37,15 @@ class SqlAlchemyAgentFlowStore:
     async def reserve(
         self,
         execution: AgentExecutionRequest,
+        *,
+        lease_owner: str = "local",
+        lease_seconds: int = 300,
     ) -> PersistedAgentFlow:
-        snapshot = reserve_flow_snapshot(execution)
+        snapshot = reserve_flow_snapshot(
+            execution,
+            lease_owner=lease_owner,
+            lease_seconds=lease_seconds,
+        )
         record = AgentPlatformFlowRecord(id=snapshot.flow_id)
         _write_snapshot(record, snapshot)
         self.db.add(record)
@@ -57,6 +68,8 @@ class SqlAlchemyAgentFlowStore:
         execution: AgentExecutionRequest,
         expected_version: int,
         approval: AgentFlowApproval | None = None,
+        lease_owner: str = "local",
+        lease_seconds: int = 300,
     ) -> PersistedAgentFlow:
         try:
             record = await self._lock(flow_id)
@@ -66,6 +79,62 @@ class SqlAlchemyAgentFlowStore:
                 current,
                 execution,
                 approval=approval,
+                lease_owner=lease_owner,
+                lease_seconds=lease_seconds,
+            )
+            _write_snapshot(record, snapshot)
+            await self.db.commit()
+            return snapshot
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def claim_recovery(
+        self,
+        *,
+        flow_id: UUID,
+        execution: AgentExecutionRequest,
+        expected_version: int,
+        recovered_by: str,
+        lease_seconds: int = 300,
+        now: datetime | None = None,
+    ) -> PersistedAgentFlow:
+        try:
+            record = await self._lock(flow_id)
+            current = _read_snapshot(record)
+            _check_version(current, expected_version)
+            snapshot = recover_flow_snapshot(
+                current,
+                execution,
+                recovered_by=recovered_by,
+                lease_seconds=lease_seconds,
+                now=now,
+            )
+            _write_snapshot(record, snapshot)
+            await self.db.commit()
+            return snapshot
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def renew_lease(
+        self,
+        *,
+        flow_id: UUID,
+        lease_id: UUID,
+        expected_version: int,
+        lease_seconds: int = 300,
+        now: datetime | None = None,
+    ) -> PersistedAgentFlow:
+        try:
+            record = await self._lock(flow_id)
+            current = _read_snapshot(record)
+            _check_version(current, expected_version)
+            snapshot = renew_flow_lease_snapshot(
+                current,
+                lease_id=lease_id,
+                lease_seconds=lease_seconds,
+                now=now,
             )
             _write_snapshot(record, snapshot)
             await self.db.commit()
@@ -80,12 +149,19 @@ class SqlAlchemyAgentFlowStore:
         flow_id: UUID,
         result: AgentFlowResult,
         expected_version: int,
+        lease_id: UUID,
+        now: datetime | None = None,
     ) -> PersistedAgentFlow:
         try:
             record = await self._lock(flow_id)
             current = _read_snapshot(record)
             _check_version(current, expected_version)
-            snapshot = complete_run_snapshot(current, result)
+            snapshot = complete_run_snapshot(
+                current,
+                result,
+                lease_id=lease_id,
+                now=now,
+            )
             _write_snapshot(record, snapshot)
             await self.db.commit()
             return snapshot
@@ -123,6 +199,20 @@ class SqlAlchemyAgentFlowStore:
         record = await self.db.get(AgentPlatformFlowRecord, flow_id)
         return _read_snapshot(record) if record is not None else None
 
+    async def get_by_workflow(
+        self,
+        *,
+        project_id: str,
+        workflow_id: str,
+    ) -> PersistedAgentFlow | None:
+        record = await self.db.scalar(
+            select(AgentPlatformFlowRecord).where(
+                AgentPlatformFlowRecord.project_key == project_id,
+                AgentPlatformFlowRecord.workflow_id == workflow_id,
+            )
+        )
+        return _read_snapshot(record) if record is not None else None
+
     async def _lock(self, flow_id: UUID) -> AgentPlatformFlowRecord:
         record = await self.db.scalar(
             select(AgentPlatformFlowRecord)
@@ -135,7 +225,18 @@ class SqlAlchemyAgentFlowStore:
 
 
 def _read_snapshot(record: AgentPlatformFlowRecord) -> PersistedAgentFlow:
-    return PersistedAgentFlow.model_validate(record.flow_json)
+    payload = dict(record.flow_json)
+    if record.lease_id is not None:
+        payload["lease"] = AgentFlowLease(
+            lease_id=record.lease_id,
+            owner=record.lease_owner or "migration-recovery",
+            acquired_at=record.lease_acquired_at or record.updated_at,
+            expires_at=record.lease_expires_at or record.updated_at,
+        ).model_dump(mode="json")
+    else:
+        payload["lease"] = None
+    payload["recovery_count"] = record.recovery_count
+    return PersistedAgentFlow.model_validate(payload)
 
 
 def _write_snapshot(
@@ -172,6 +273,11 @@ def _write_snapshot(
     )
     record.correlation_id = snapshot.correlation_id
     record.resume_count = snapshot.resume_count
+    record.recovery_count = snapshot.recovery_count
+    record.lease_id = snapshot.lease.lease_id if snapshot.lease is not None else None
+    record.lease_owner = snapshot.lease.owner if snapshot.lease is not None else None
+    record.lease_acquired_at = snapshot.lease.acquired_at if snapshot.lease is not None else None
+    record.lease_expires_at = snapshot.lease.expires_at if snapshot.lease is not None else None
     record.last_approval_decision = (
         latest_approval.decision.value if latest_approval is not None else None
     )

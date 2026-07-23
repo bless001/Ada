@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
@@ -37,6 +37,10 @@ class AgentFlowVersionConflictError(AgentFlowPersistenceError):
     pass
 
 
+class AgentFlowLeaseConflictError(AgentFlowPersistenceError):
+    pass
+
+
 class AgentFlowApproval(BaseModel):
     decision: ApprovalDecision
     approval_reference: str = Field(min_length=1)
@@ -44,6 +48,22 @@ class AgentFlowApproval(BaseModel):
     reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     recorded_at: datetime = Field(default_factory=_utc_now)
+
+
+class AgentFlowLease(BaseModel):
+    lease_id: UUID = Field(default_factory=uuid4)
+    owner: str = Field(min_length=1, max_length=160)
+    acquired_at: datetime = Field(default_factory=_utc_now)
+    expires_at: datetime
+
+
+class AgentFlowRecoveryRecord(BaseModel):
+    sequence: int = Field(ge=1)
+    execution_id: UUID
+    recovered_by: str = Field(min_length=1, max_length=160)
+    recovered_at: datetime = Field(default_factory=_utc_now)
+    previous_lease: AgentFlowLease
+    replacement_lease: AgentFlowLease
 
 
 class AgentFlowStepRecord(BaseModel):
@@ -72,7 +92,10 @@ class PersistedAgentFlow(BaseModel):
     reason: str
     correlation_id: str
     resume_count: int = Field(default=0, ge=0)
+    recovery_count: int = Field(default=0, ge=0)
     approvals: list[AgentFlowApproval] = Field(default_factory=list)
+    lease: AgentFlowLease | None = None
+    recoveries: list[AgentFlowRecoveryRecord] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
 
@@ -82,6 +105,9 @@ class AgentFlowStore(Protocol):
     async def reserve(
         self,
         execution: AgentExecutionRequest,
+        *,
+        lease_owner: str = "local",
+        lease_seconds: int = 300,
     ) -> PersistedAgentFlow: ...
 
     async def begin_resume(
@@ -91,6 +117,27 @@ class AgentFlowStore(Protocol):
         execution: AgentExecutionRequest,
         expected_version: int,
         approval: AgentFlowApproval | None = None,
+        lease_owner: str = "local",
+        lease_seconds: int = 300,
+    ) -> PersistedAgentFlow: ...
+
+    async def claim_recovery(
+        self,
+        *,
+        flow_id: UUID,
+        execution: AgentExecutionRequest,
+        expected_version: int,
+        recovered_by: str,
+        lease_seconds: int = 300,
+    ) -> PersistedAgentFlow: ...
+
+    async def renew_lease(
+        self,
+        *,
+        flow_id: UUID,
+        lease_id: UUID,
+        expected_version: int,
+        lease_seconds: int = 300,
     ) -> PersistedAgentFlow: ...
 
     async def complete_run(
@@ -99,6 +146,8 @@ class AgentFlowStore(Protocol):
         flow_id: UUID,
         result: AgentFlowResult,
         expected_version: int,
+        lease_id: UUID,
+        now: datetime | None = None,
     ) -> PersistedAgentFlow: ...
 
     async def close(
@@ -113,6 +162,13 @@ class AgentFlowStore(Protocol):
 
     async def get(self, flow_id: UUID) -> PersistedAgentFlow | None: ...
 
+    async def get_by_workflow(
+        self,
+        *,
+        project_id: str,
+        workflow_id: str,
+    ) -> PersistedAgentFlow | None: ...
+
 
 class InMemoryAgentFlowStore:
     def __init__(self) -> None:
@@ -122,6 +178,9 @@ class InMemoryAgentFlowStore:
     async def reserve(
         self,
         execution: AgentExecutionRequest,
+        *,
+        lease_owner: str = "local",
+        lease_seconds: int = 300,
     ) -> PersistedAgentFlow:
         identity = (
             execution.request.project_id,
@@ -131,7 +190,11 @@ class InMemoryAgentFlowStore:
             raise AgentFlowVersionConflictError(
                 f"Agent flow already exists for workflow: {execution.workflow_id}"
             )
-        snapshot = reserve_flow_snapshot(execution)
+        snapshot = reserve_flow_snapshot(
+            execution,
+            lease_owner=lease_owner,
+            lease_seconds=lease_seconds,
+        )
         self.flows[snapshot.flow_id] = snapshot
         self.workflow_index[identity] = snapshot.flow_id
         return snapshot.model_copy(deep=True)
@@ -143,6 +206,8 @@ class InMemoryAgentFlowStore:
         execution: AgentExecutionRequest,
         expected_version: int,
         approval: AgentFlowApproval | None = None,
+        lease_owner: str = "local",
+        lease_seconds: int = 300,
     ) -> PersistedAgentFlow:
         current = self._require(flow_id)
         _check_version(current, expected_version)
@@ -150,6 +215,50 @@ class InMemoryAgentFlowStore:
             current,
             execution,
             approval=approval,
+            lease_owner=lease_owner,
+            lease_seconds=lease_seconds,
+        )
+        self.flows[flow_id] = snapshot
+        return snapshot.model_copy(deep=True)
+
+    async def claim_recovery(
+        self,
+        *,
+        flow_id: UUID,
+        execution: AgentExecutionRequest,
+        expected_version: int,
+        recovered_by: str,
+        lease_seconds: int = 300,
+        now: datetime | None = None,
+    ) -> PersistedAgentFlow:
+        current = self._require(flow_id)
+        _check_version(current, expected_version)
+        snapshot = recover_flow_snapshot(
+            current,
+            execution,
+            recovered_by=recovered_by,
+            lease_seconds=lease_seconds,
+            now=now,
+        )
+        self.flows[flow_id] = snapshot
+        return snapshot.model_copy(deep=True)
+
+    async def renew_lease(
+        self,
+        *,
+        flow_id: UUID,
+        lease_id: UUID,
+        expected_version: int,
+        lease_seconds: int = 300,
+        now: datetime | None = None,
+    ) -> PersistedAgentFlow:
+        current = self._require(flow_id)
+        _check_version(current, expected_version)
+        snapshot = renew_flow_lease_snapshot(
+            current,
+            lease_id=lease_id,
+            lease_seconds=lease_seconds,
+            now=now,
         )
         self.flows[flow_id] = snapshot
         return snapshot.model_copy(deep=True)
@@ -160,10 +269,17 @@ class InMemoryAgentFlowStore:
         flow_id: UUID,
         result: AgentFlowResult,
         expected_version: int,
+        lease_id: UUID,
+        now: datetime | None = None,
     ) -> PersistedAgentFlow:
         current = self._require(flow_id)
         _check_version(current, expected_version)
-        snapshot = complete_run_snapshot(current, result)
+        snapshot = complete_run_snapshot(
+            current,
+            result,
+            lease_id=lease_id,
+            now=now,
+        )
         self.flows[flow_id] = snapshot
         return snapshot.model_copy(deep=True)
 
@@ -191,6 +307,15 @@ class InMemoryAgentFlowStore:
         snapshot = self.flows.get(flow_id)
         return snapshot.model_copy(deep=True) if snapshot is not None else None
 
+    async def get_by_workflow(
+        self,
+        *,
+        project_id: str,
+        workflow_id: str,
+    ) -> PersistedAgentFlow | None:
+        flow_id = self.workflow_index.get((project_id, workflow_id))
+        return await self.get(flow_id) if flow_id is not None else None
+
     def _require(self, flow_id: UUID) -> PersistedAgentFlow:
         snapshot = self.flows.get(flow_id)
         if snapshot is None:
@@ -202,7 +327,11 @@ def reserve_flow_snapshot(
     execution: AgentExecutionRequest,
     *,
     flow_id: UUID | None = None,
+    lease_owner: str = "local",
+    lease_seconds: int = 300,
+    now: datetime | None = None,
 ) -> PersistedAgentFlow:
+    acquired_at = now or _utc_now()
     return PersistedAgentFlow(
         flow_id=flow_id or uuid4(),
         workflow_id=execution.workflow_id,
@@ -213,6 +342,13 @@ def reserve_flow_snapshot(
         pending_execution_payload=execution.model_dump(mode="json"),
         reason="Flow execution reserved.",
         correlation_id=execution.correlation_id,
+        lease=_new_lease(
+            owner=lease_owner,
+            lease_seconds=lease_seconds,
+            acquired_at=acquired_at,
+        ),
+        created_at=acquired_at,
+        updated_at=acquired_at,
     )
 
 
@@ -221,6 +357,9 @@ def begin_resume_snapshot(
     execution: AgentExecutionRequest,
     *,
     approval: AgentFlowApproval | None = None,
+    lease_owner: str = "local",
+    lease_seconds: int = 300,
+    now: datetime | None = None,
 ) -> PersistedAgentFlow:
     resumable = {
         AgentFlowStatus.WAITING_FOR_APPROVAL,
@@ -246,6 +385,7 @@ def begin_resume_snapshot(
     approvals = [*current.approvals]
     if approval is not None:
         approvals.append(approval)
+    acquired_at = now or _utc_now()
     return current.model_copy(
         deep=True,
         update={
@@ -257,7 +397,95 @@ def begin_resume_snapshot(
             "reason": "Flow resume reserved.",
             "resume_count": current.resume_count + 1,
             "approvals": approvals,
-            "updated_at": _utc_now(),
+            "lease": _new_lease(
+                owner=lease_owner,
+                lease_seconds=lease_seconds,
+                acquired_at=acquired_at,
+            ),
+            "updated_at": acquired_at,
+        },
+    )
+
+
+def recover_flow_snapshot(
+    current: PersistedAgentFlow,
+    execution: AgentExecutionRequest,
+    *,
+    recovered_by: str,
+    lease_seconds: int = 300,
+    now: datetime | None = None,
+) -> PersistedAgentFlow:
+    if current.status != AgentFlowStatus.RUNNING:
+        raise AgentFlowPersistenceError(
+            f"Only a running flow can be recovered, found: {current.status.value}"
+        )
+    if current.lease is None:
+        raise AgentFlowPersistenceError("Running flow does not have a recovery lease")
+    recovered_at = now or _utc_now()
+    if current.lease.expires_at > recovered_at:
+        raise AgentFlowLeaseConflictError(
+            f"Agent flow lease is active until {current.lease.expires_at.isoformat()}"
+        )
+    _validate_execution_identity(current, execution)
+    execution_payload = execution.model_dump(mode="json")
+    if execution_payload != current.pending_execution_payload:
+        raise AgentFlowPersistenceError(
+            "Recovery request must exactly match the pending execution payload"
+        )
+    replacement_lease = _new_lease(
+        owner=recovered_by,
+        lease_seconds=lease_seconds,
+        acquired_at=recovered_at,
+    )
+    recovery = AgentFlowRecoveryRecord(
+        sequence=current.recovery_count + 1,
+        execution_id=execution.request.execution_id,
+        recovered_by=recovered_by,
+        recovered_at=recovered_at,
+        previous_lease=current.lease,
+        replacement_lease=replacement_lease,
+    )
+    return current.model_copy(
+        deep=True,
+        update={
+            "version": current.version + 1,
+            "recovery_count": current.recovery_count + 1,
+            "recoveries": [*current.recoveries, recovery],
+            "lease": replacement_lease,
+            "reason": f"Expired flow lease recovered by {recovered_by}.",
+            "updated_at": recovered_at,
+        },
+    )
+
+
+def renew_flow_lease_snapshot(
+    current: PersistedAgentFlow,
+    *,
+    lease_id: UUID,
+    lease_seconds: int = 300,
+    now: datetime | None = None,
+) -> PersistedAgentFlow:
+    if current.status != AgentFlowStatus.RUNNING:
+        raise AgentFlowPersistenceError(
+            f"Only a running flow lease can be renewed, found: {current.status.value}"
+        )
+    renewed_at = now or _utc_now()
+    lease = _require_lease(current, lease_id)
+    if lease.expires_at <= renewed_at:
+        raise AgentFlowLeaseConflictError("Expired flow lease cannot be renewed")
+    renewed_lease = lease.model_copy(
+        update={
+            "expires_at": max(
+                lease.expires_at,
+                _lease_expiry(renewed_at, lease_seconds),
+            ),
+        }
+    )
+    return current.model_copy(
+        deep=True,
+        update={
+            "lease": renewed_lease,
+            "updated_at": renewed_at,
         },
     )
 
@@ -265,9 +493,14 @@ def begin_resume_snapshot(
 def complete_run_snapshot(
     current: PersistedAgentFlow,
     result: AgentFlowResult,
+    *,
+    lease_id: UUID,
+    now: datetime | None = None,
 ) -> PersistedAgentFlow:
     if current.status != AgentFlowStatus.RUNNING:
         raise AgentFlowPersistenceError("Only a running flow can complete an execution")
+    completed_at = now or _utc_now()
+    _require_active_lease(current, lease_id, at=completed_at)
     if result.workflow_id != current.workflow_id:
         raise AgentFlowPersistenceError("Completed flow must preserve workflow_id")
     if not result.steps:
@@ -287,8 +520,9 @@ def complete_run_snapshot(
             "steps": [*current.steps, *new_steps],
             "pending_route": result.pending_route,
             "pending_execution_payload": None,
+            "lease": None,
             "reason": result.reason,
-            "updated_at": _utc_now(),
+            "updated_at": completed_at,
         },
     )
 
@@ -324,6 +558,7 @@ def close_flow_snapshot(
             "version": current.version + 1,
             "pending_route": None,
             "pending_execution_payload": None,
+            "lease": None,
             "reason": reason,
             "resume_count": current.resume_count + 1,
             "approvals": [*current.approvals, approval],
@@ -370,6 +605,52 @@ def _validate_execution_identity(
         raise AgentFlowPersistenceError("Resumed flow must preserve workflow_id")
     if execution.request.project_id != current.project_id:
         raise AgentFlowPersistenceError("Resumed flow must preserve project_id")
+
+
+def _new_lease(
+    *,
+    owner: str,
+    lease_seconds: int,
+    acquired_at: datetime,
+) -> AgentFlowLease:
+    if not owner.strip():
+        raise AgentFlowPersistenceError("Flow lease owner cannot be blank")
+    if len(owner) > 160:
+        raise AgentFlowPersistenceError("Flow lease owner cannot exceed 160 characters")
+    return AgentFlowLease(
+        owner=owner,
+        acquired_at=acquired_at,
+        expires_at=_lease_expiry(acquired_at, lease_seconds),
+    )
+
+
+def _lease_expiry(started_at: datetime, lease_seconds: int) -> datetime:
+    if lease_seconds < 1:
+        raise AgentFlowPersistenceError("Flow lease duration must be at least 1 second")
+    return started_at + timedelta(seconds=lease_seconds)
+
+
+def _require_lease(
+    current: PersistedAgentFlow,
+    lease_id: UUID,
+) -> AgentFlowLease:
+    if current.lease is None:
+        raise AgentFlowLeaseConflictError("Agent flow does not have an active lease")
+    if current.lease.lease_id != lease_id:
+        raise AgentFlowLeaseConflictError("Agent flow lease token does not match")
+    return current.lease
+
+
+def _require_active_lease(
+    current: PersistedAgentFlow,
+    lease_id: UUID,
+    *,
+    at: datetime,
+) -> AgentFlowLease:
+    lease = _require_lease(current, lease_id)
+    if lease.expires_at <= at:
+        raise AgentFlowLeaseConflictError("Expired flow lease cannot complete execution")
+    return lease
 
 
 def _check_version(current: PersistedAgentFlow, expected_version: int) -> None:

@@ -5,6 +5,10 @@
     "timeout_seconds": 180,
     "context_window": 29696
   },
+  "flow_runtime": {
+    "lease_seconds": 300,
+    "recovery_enabled": true
+  },
   "agents": {
     "planning": {
       "agent_type": "planning",

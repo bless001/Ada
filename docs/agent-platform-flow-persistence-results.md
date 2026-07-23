@@ -17,6 +17,9 @@ process fails after reservation.
 - Added durable `start_flow`, `get_flow`, and `resume_flow` service methods.
 - Added `POST /v1/agents/flows`, `GET /v1/agents/flows/{flow_id}`, and
   `POST /v1/agents/flows/{flow_id}/resume`.
+- Added workflow lookup, heartbeat, and expired-run recovery endpoints.
+- Added tokenized leases and append-only recovery audit records.
+- Added Alembic migration `0013_agent_flow_recovery_leases`.
 - Preserved `POST /v1/agents/execute` and persistence-free `AgentFlowOrchestrator` behavior.
 
 ## Aggregate Lifecycle
@@ -68,9 +71,17 @@ retention and redaction policies must cover request metadata and artifact payloa
 
 Reservation commits before agent execution. If execution raises, the aggregate remains `running`
 with the pending execution payload and unchanged step history. This prevents loss of execution
-identity and supports diagnosis. Automatic recovery of interrupted running claims is intentionally
-not enabled yet because it requires an explicit lease/timeout and idempotency policy to avoid
-duplicating repository or external side effects.
+identity and supports diagnosis.
+
+Every running claim now has an expiring lease. An active lease cannot be recovered. Its owner can
+heartbeat with the current token and version; this extends expiry without incrementing the
+aggregate version. After expiry, an operator or worker can claim recovery only by supplying the
+same typed request, including execution ID, objective, configuration, metadata, workflow, and
+correlation identity. Recovery replaces the token and increments the version, so the stale worker
+cannot commit even if it later returns.
+
+Recovery remains an explicit operation rather than an automatic replay because repository and
+external side effects require operator or worker-level idempotency judgment.
 
 ## Compatibility
 
@@ -92,12 +103,13 @@ Coverage includes:
 - Failure preservation.
 - API request construction and HTTP `409` conflict mapping.
 - Live PostgreSQL JSONB reload, indexed columns, row-version transitions, and Alembic head.
+- Heartbeat, exact replay, stale lease rejection, workflow discovery, and recovery audit history.
 
 Commands run:
 
 ```powershell
 .venv/Scripts/python.exe -m ruff check <changed Python files>
-.venv/Scripts/python.exe -m pytest -q tests/test_agent_flow_persistence.py tests/test_agent_platform_api.py tests/test_agent_platform_flow.py
+.venv/Scripts/python.exe -m pytest -q tests/test_agent_flow_persistence.py tests/test_agent_platform_api.py tests/test_agent_platform_flow.py tests/test_agent_platform.py
 .venv/Scripts/python.exe -m pytest -q tests/test_agent_flow_postgres_integration.py
 ..\.venv\Scripts\python.exe -m alembic -c alembic.ini heads
 .venv/Scripts/python.exe -m pytest -q
@@ -106,7 +118,7 @@ Commands run:
 Results:
 
 - Ruff: passed.
-- Focused persistence, API, and flow tests: 23 passed.
+- Focused persistence, API, flow, and platform tests: 47 passed.
 - Live PostgreSQL flow-store test: 1 passed.
-- Alembic head: `0012_agent_platform_flows`.
-- Full suite with PostgreSQL integrations enabled: 173 passed, 2 skipped, 4 existing warnings.
+- Alembic head: `0013_agent_flow_recovery_leases`.
+- Full suite with PostgreSQL integrations enabled: 183 passed, 2 skipped, 4 existing warnings.

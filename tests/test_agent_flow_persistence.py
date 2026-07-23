@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -15,6 +16,7 @@ from planning_agent_core.agent_platform.config import AgentConfig
 from planning_agent_core.agent_platform.orchestration import (
     AgentExecutionRequest,
     AgentFlowApproval,
+    AgentFlowLeaseConflictError,
     AgentFlowPersistenceError,
     AgentFlowResult,
     AgentFlowStatus,
@@ -164,12 +166,14 @@ async def test_in_memory_store_reserves_before_appending_completed_step():
             status=AgentFlowStatus.WAITING_FOR_APPROVAL,
         ),
         expected_version=reserved.version,
+        lease_id=reserved.lease.lease_id,
     )
 
     assert completed.status == AgentFlowStatus.WAITING_FOR_APPROVAL
     assert completed.version == 2
     assert completed.step_count == 1
     assert completed.pending_execution_payload is None
+    assert completed.lease is None
     assert completed.steps[0].request_payload["agent_type"] == "planning"
     assert completed.steps[0].result_payload["summary"] == "planning completed."
 
@@ -338,3 +342,201 @@ async def test_service_preserves_reserved_execution_when_agent_raises():
     assert reserved.pending_execution_payload["request"]["execution_id"] == str(
         execution.request.execution_id
     )
+    assert reserved.lease is not None
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_extends_active_lease_without_changing_version():
+    store = InMemoryAgentFlowStore()
+    execution = _execution()
+    reserved = await store.reserve(execution, lease_seconds=60)
+    renewed_at = reserved.lease.acquired_at + timedelta(seconds=30)
+
+    heartbeat = await store.renew_lease(
+        flow_id=reserved.flow_id,
+        lease_id=reserved.lease.lease_id,
+        expected_version=reserved.version,
+        lease_seconds=120,
+        now=renewed_at,
+    )
+
+    assert heartbeat.version == reserved.version
+    assert heartbeat.lease.lease_id == reserved.lease.lease_id
+    assert heartbeat.lease.expires_at == renewed_at + timedelta(seconds=120)
+
+    with pytest.raises(AgentFlowLeaseConflictError, match="token does not match"):
+        await store.renew_lease(
+            flow_id=reserved.flow_id,
+            lease_id=uuid4(),
+            expected_version=reserved.version,
+            now=renewed_at,
+        )
+
+    with pytest.raises(AgentFlowLeaseConflictError, match="token does not match"):
+        await store.complete_run(
+            flow_id=reserved.flow_id,
+            result=_flow_result(
+                execution,
+                _outcome(
+                    execution,
+                    next_action=AgentNextAction.COMPLETE,
+                    next_agent_type=None,
+                ),
+                status=AgentFlowStatus.COMPLETED,
+            ),
+            expected_version=reserved.version,
+            lease_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_recovery_rejects_active_lease_and_modified_request():
+    store = InMemoryAgentFlowStore()
+    execution = _execution()
+    reserved = await store.reserve(execution, lease_seconds=60)
+
+    with pytest.raises(AgentFlowLeaseConflictError, match="lease is active"):
+        await store.claim_recovery(
+            flow_id=reserved.flow_id,
+            execution=execution,
+            expected_version=reserved.version,
+            recovered_by="worker-recovery",
+            now=reserved.lease.acquired_at + timedelta(seconds=30),
+        )
+
+    with pytest.raises(AgentFlowLeaseConflictError, match="cannot complete"):
+        await store.complete_run(
+            flow_id=reserved.flow_id,
+            result=_flow_result(
+                execution,
+                _outcome(
+                    execution,
+                    next_action=AgentNextAction.COMPLETE,
+                    next_agent_type=None,
+                ),
+                status=AgentFlowStatus.COMPLETED,
+            ),
+            expected_version=reserved.version,
+            lease_id=reserved.lease.lease_id,
+            now=reserved.lease.expires_at,
+        )
+
+    modified = _execution()
+    modified.request.execution_id = execution.request.execution_id
+    modified.request.objective = "Silently expanded recovery scope."
+    with pytest.raises(AgentFlowPersistenceError, match="exactly match"):
+        await store.claim_recovery(
+            flow_id=reserved.flow_id,
+            execution=modified,
+            expected_version=reserved.version,
+            recovered_by="worker-recovery",
+            now=reserved.lease.expires_at,
+        )
+
+
+@pytest.mark.asyncio
+async def test_recovery_claim_replaces_expired_lease_and_records_audit():
+    store = InMemoryAgentFlowStore()
+    execution = _execution()
+    reserved = await store.reserve(execution, lease_seconds=60)
+
+    recovered = await store.claim_recovery(
+        flow_id=reserved.flow_id,
+        execution=execution,
+        expected_version=reserved.version,
+        recovered_by="worker-recovery",
+        lease_seconds=300,
+        now=reserved.lease.expires_at,
+    )
+
+    assert recovered.version == 2
+    assert recovered.recovery_count == 1
+    assert recovered.lease.lease_id != reserved.lease.lease_id
+    assert recovered.lease.owner == "worker-recovery"
+    assert recovered.recoveries[0].previous_lease == reserved.lease
+    assert recovered.recoveries[0].replacement_lease == recovered.lease
+
+    with pytest.raises(AgentFlowVersionConflictError, match="expected 1, found 2"):
+        await store.complete_run(
+            flow_id=reserved.flow_id,
+            result=_flow_result(
+                execution,
+                _outcome(
+                    execution,
+                    next_action=AgentNextAction.COMPLETE,
+                    next_agent_type=None,
+                ),
+                status=AgentFlowStatus.COMPLETED,
+            ),
+            expected_version=reserved.version,
+            lease_id=reserved.lease.lease_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_recovers_failed_start_and_workflow_lookup():
+    store = InMemoryAgentFlowStore()
+    execution = _execution()
+    orchestrator = ScriptedStepOrchestrator([RuntimeError("worker stopped")])
+    service = AgentPlatformService(
+        dependencies=AgentDependencyContainer(),
+        orchestrator=orchestrator,
+        flow_store=store,
+        flow_lease_seconds=60,
+    )
+
+    with pytest.raises(RuntimeError, match="worker stopped"):
+        await service.start_flow(execution)
+
+    reserved = await service.get_flow_by_workflow(
+        project_id=execution.request.project_id,
+        workflow_id=execution.workflow_id,
+    )
+    store.flows[reserved.flow_id] = reserved.model_copy(
+        update={
+            "lease": reserved.lease.model_copy(
+                update={
+                    "expires_at": reserved.lease.acquired_at,
+                }
+            )
+        }
+    )
+    orchestrator.outcomes.append(
+        _outcome(
+            execution,
+            next_action=AgentNextAction.COMPLETE,
+            next_agent_type=None,
+        )
+    )
+
+    recovered = await service.recover_flow(
+        flow_id=reserved.flow_id,
+        expected_version=reserved.version,
+        request=execution,
+        recovered_by="operator-1",
+    )
+
+    assert recovered.status == AgentFlowStatus.COMPLETED
+    assert recovered.version == 3
+    assert recovered.recovery_count == 1
+    assert recovered.step_count == 1
+
+
+@pytest.mark.asyncio
+async def test_service_can_disable_recovery():
+    store = InMemoryAgentFlowStore()
+    execution = _execution()
+    reserved = await store.reserve(execution)
+    service = AgentPlatformService(
+        dependencies=AgentDependencyContainer(),
+        flow_store=store,
+        flow_recovery_enabled=False,
+    )
+
+    with pytest.raises(AgentValidationError, match="recovery is disabled"):
+        await service.recover_flow(
+            flow_id=reserved.flow_id,
+            expected_version=reserved.version,
+            request=execution,
+            recovered_by="operator-1",
+        )

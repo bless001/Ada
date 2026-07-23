@@ -52,6 +52,7 @@ Current infrastructure ports:
 - `planning_agent_core/agent-platform.example.json`
 - `planning_agent_core/alembic/versions/0011_agent_platform_persistence.py`
 - `planning_agent_core/alembic/versions/0012_agent_platform_flows.py`
+- `planning_agent_core/alembic/versions/0013_agent_flow_recovery_leases.py`
 - `tests/test_agent_platform.py`
 - `tests/test_agent_flow_persistence.py`
 - `tests/test_agent_flow_postgres_integration.py`
@@ -77,6 +78,8 @@ Current infrastructure ports:
   composition injects PostgreSQL implementations for all three.
 - `agent_platform_flows` stores serialized typed requests and results for audit/recovery. Deployments
   must apply their normal secret-redaction and retention policy to request metadata and artifacts.
+- Recovery replays must use the exact pending execution payload. Callers should fetch the aggregate
+  by flow ID or workflow identity instead of constructing a replacement objective or configuration.
 - Agent config currently uses JSON loading. YAML can be added later if a dependency is acceptable.
 
 ## Migration Steps
@@ -94,9 +97,13 @@ Current infrastructure ports:
 9. Resume the same `flow_id` with its current `version`, explicit approval evidence where required,
    and a typed request matching the stored workflow and pending agent.
 10. Apply Alembic migration `0012_agent_platform_flows` before enabling the durable endpoints.
-11. Move OpenProject, Neo4j, Weaviate, and repository indexing triggers behind orchestrator-driven events.
-12. Add richer agent workflows internally without changing factory or orchestrator code.
-13. Retire legacy direct workflow entry points only after API and integration tests prove parity.
+11. Apply migration `0013_agent_flow_recovery_leases`, configure `flow_runtime.lease_seconds`, and
+    decide whether recovery is enabled.
+12. Heartbeat long-running externally owned claims before expiry; recover only expired claims using
+    their exact pending request.
+13. Move OpenProject, Neo4j, Weaviate, and repository indexing triggers behind orchestrator-driven events.
+14. Add richer agent workflows internally without changing factory or orchestrator code.
+15. Retire legacy direct workflow entry points only after API and integration tests prove parity.
 
 ## Example Flow
 

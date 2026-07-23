@@ -15,6 +15,7 @@ from planning_agent_core.agent_platform.config import AgentConfig, load_agent_pl
 from planning_agent_core.agent_platform.orchestration import (
     AgentExecutionRequest,
     AgentFlowApproval,
+    AgentFlowLeaseConflictError,
     AgentFlowNotFoundError,
     AgentFlowVersionConflictError,
     AgentRouteDecision,
@@ -76,6 +77,19 @@ class AgentFlowResumePayload(BaseModel):
     max_steps: int = Field(default=10, ge=1, le=100)
 
 
+class AgentFlowHeartbeatPayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    lease_id: UUID
+
+
+class AgentFlowRecoveryPayload(BaseModel):
+    expected_version: int = Field(ge=1)
+    recovered_by: str = Field(min_length=1, max_length=160)
+    request: AgentExecutionRequestPayload
+    config: SerializeAsAny[AgentConfig] | None = None
+    max_steps: int = Field(default=10, ge=1, le=100)
+
+
 @router.post("/execute", response_model=AgentExecutionResponse)
 async def execute_agent(
     payload: AgentExecutePayload,
@@ -126,6 +140,22 @@ async def start_agent_flow(
         raise _flow_http_exception(exc) from exc
 
 
+@router.get("/flows/by-workflow", response_model=PersistedAgentFlow)
+async def get_agent_flow_by_workflow(
+    project_id: str,
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> PersistedAgentFlow:
+    service = create_agent_platform_service_for_db(db)
+    try:
+        return await service.get_flow_by_workflow(
+            project_id=project_id,
+            workflow_id=workflow_id,
+        )
+    except Exception as exc:
+        raise _flow_http_exception(exc) from exc
+
+
 @router.get("/flows/{flow_id}", response_model=PersistedAgentFlow)
 async def get_agent_flow(
     flow_id: UUID,
@@ -134,6 +164,58 @@ async def get_agent_flow(
     service = create_agent_platform_service_for_db(db)
     try:
         return await service.get_flow(flow_id)
+    except Exception as exc:
+        raise _flow_http_exception(exc) from exc
+
+
+@router.post("/flows/{flow_id}/heartbeat", response_model=PersistedAgentFlow)
+async def heartbeat_agent_flow(
+    flow_id: UUID,
+    payload: AgentFlowHeartbeatPayload,
+    db: AsyncSession = Depends(get_db),
+) -> PersistedAgentFlow:
+    service = create_agent_platform_service_for_db(db)
+    try:
+        return await service.heartbeat_flow(
+            flow_id=flow_id,
+            lease_id=payload.lease_id,
+            expected_version=payload.expected_version,
+        )
+    except Exception as exc:
+        raise _flow_http_exception(exc) from exc
+
+
+@router.post("/flows/{flow_id}/recover", response_model=PersistedAgentFlow)
+async def recover_agent_flow(
+    flow_id: UUID,
+    payload: AgentFlowRecoveryPayload,
+    db: AsyncSession = Depends(get_db),
+) -> PersistedAgentFlow:
+    service = create_agent_platform_service_for_db(db)
+    try:
+        current = await service.get_flow(flow_id)
+        persisted_config = (
+            current.pending_execution_payload.get("config")
+            if current.pending_execution_payload is not None
+            else None
+        )
+        if payload.config is None and not isinstance(persisted_config, dict):
+            raise AgentValidationError("Running flow has no persisted agent configuration")
+        config = payload.config or AgentConfig.model_validate(persisted_config)
+        _validate_config_type(payload.request.agent_type, config)
+        execution = _build_execution_request(
+            request=payload.request,
+            config=config,
+            workflow_id=current.workflow_id,
+            correlation_id=current.correlation_id,
+        )
+        return await service.recover_flow(
+            flow_id=flow_id,
+            expected_version=payload.expected_version,
+            request=execution,
+            recovered_by=payload.recovered_by,
+            max_steps=payload.max_steps,
+        )
     except Exception as exc:
         raise _flow_http_exception(exc) from exc
 
@@ -188,6 +270,8 @@ def create_agent_platform_service_for_db(db: AsyncSession) -> AgentPlatformServi
         dependencies,
         transition_resolver=transition_resolver,
         flow_store=SqlAlchemyAgentFlowStore(db),
+        flow_lease_seconds=platform_config.flow_runtime.lease_seconds,
+        flow_recovery_enabled=platform_config.flow_runtime.recovery_enabled,
     )
 
 
@@ -229,6 +313,8 @@ def _flow_http_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, AgentFlowNotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, AgentFlowVersionConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, AgentFlowLeaseConflictError):
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, AgentValidationError):
         return HTTPException(status_code=409, detail=str(exc))

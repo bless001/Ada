@@ -26,6 +26,8 @@ Added a modular `agent_platform` package that generalizes the existing planning-
   `AgentPlatformService` and `/v1/agents/flows` endpoints.
 - `agent_platform_flows` persists versioned aggregate status, append-only step history, pending
   execution input, approval evidence, and indexed transition fields.
+- Expiring lease tokens, heartbeat, exact-request recovery, workflow lookup, and append-only
+  recovery history protect interrupted running flows from concurrent or stale completion.
 - Database-backed platform services now inject `ApplicationAgentTransitionResolver`, which builds
   typed coding and verification handoffs from persisted task context.
 - JSON configuration models, default config, loader, and example config.
@@ -54,13 +56,14 @@ Commands run:
 Results:
 
 - Ruff: passed.
-- Focused platform and flow tests: 28 passed.
-- Full test suite with PostgreSQL integrations enabled: 173 passed, 2 skipped, 4 existing
+- Focused platform and flow tests: 47 passed.
+- Full test suite with PostgreSQL integrations enabled: 183 passed, 2 skipped, 4 existing
   warnings.
 
 ## Remaining Follow-Up
 
-- Add an operator-controlled recovery policy for flows left `running` after process interruption.
+- Move synchronous API flow execution to a background worker if automatic heartbeat is required for
+  runs that may exceed the configured lease duration.
 - Expand internal LangGraph workflows inside each agent without coupling agents into one graph.
 - Add richer verification skills for acceptance matrix, regression risk, security/config review, and test adequacy.
 - Add integration tests against live OpenProject/Neo4j/Weaviate for platform-driven projections.
