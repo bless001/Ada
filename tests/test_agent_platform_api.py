@@ -29,6 +29,7 @@ from planning_agent_core.api.agents import (
     AgentFlowResumePayload,
     AgentFlowStartPayload,
     create_agent_platform_service_for_db,
+    enqueue_agent_flow,
     execute_agent,
     get_agent_flow_by_workflow,
     heartbeat_agent_flow,
@@ -90,6 +91,10 @@ class FakeFlowService:
         self.calls.append(("start", execution, kwargs))
         return "started"
 
+    async def enqueue_flow(self, execution, **kwargs):
+        self.calls.append(("enqueue", execution, kwargs))
+        return "queued"
+
     async def get_flow(self, flow_id):
         self.calls.append(("get", flow_id))
         return self.current
@@ -115,6 +120,7 @@ def test_agent_flow_operational_routes_are_registered_before_dynamic_lookup():
     paths = [route.path for route in router.routes]
 
     assert "/v1/agents/flows/by-workflow" in paths
+    assert "/v1/agents/flows/async" in paths
     assert "/v1/agents/flows/{flow_id}/heartbeat" in paths
     assert "/v1/agents/flows/{flow_id}/recover" in paths
     assert paths.index("/v1/agents/flows/by-workflow") < paths.index(
@@ -245,6 +251,34 @@ async def test_start_agent_flow_builds_typed_execution_request(monkeypatch):
     assert execution.correlation_id == "correlation-flow-api"
     assert execution.agent_type == "planning"
     assert kwargs == {"max_steps": 4}
+
+
+@pytest.mark.asyncio
+async def test_enqueue_agent_flow_builds_typed_execution_request(monkeypatch):
+    fake_service = FakeFlowService()
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: fake_service,
+    )
+    payload = AgentFlowStartPayload(
+        request=PlanningAgentRequest(
+            project_id="demo",
+            objective="Queue a durable plan.",
+        ),
+        workflow_id="workflow-queue-api",
+        correlation_id="correlation-queue-api",
+        max_steps=6,
+    )
+
+    response = await enqueue_agent_flow(payload, db=object())
+
+    assert response == "queued"
+    operation, execution, kwargs = fake_service.calls[0]
+    assert operation == "enqueue"
+    assert execution.workflow_id == "workflow-queue-api"
+    assert execution.correlation_id == "correlation-queue-api"
+    assert isinstance(execution.request, PlanningAgentRequest)
+    assert kwargs == {"max_steps": 6}
 
 
 @pytest.mark.asyncio

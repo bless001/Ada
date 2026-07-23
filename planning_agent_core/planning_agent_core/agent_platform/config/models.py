@@ -31,7 +31,16 @@ class AgentConfig(BaseModel):
 
 class AgentFlowRuntimeConfig(BaseModel):
     lease_seconds: int = Field(default=300, ge=1, le=86400)
+    heartbeat_seconds: float = Field(default=60.0, gt=0)
+    worker_poll_seconds: float = Field(default=2.0, gt=0, le=60)
     recovery_enabled: bool = True
+    max_recovery_attempts: int = Field(default=3, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def heartbeat_must_precede_lease_expiry(self) -> "AgentFlowRuntimeConfig":
+        if self.heartbeat_seconds >= self.lease_seconds:
+            raise ValueError("heartbeat_seconds must be less than lease_seconds")
+        return self
 
 
 class AgentPlatformConfig(BaseModel):

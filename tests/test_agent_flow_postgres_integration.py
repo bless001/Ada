@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import os
 import subprocess
@@ -269,5 +270,70 @@ async def test_postgres_flow_store_persists_versioned_resume_history(
             assert recovery_record is not None
             assert recovery_record.recovery_count == 1
             assert recovery_record.lease_id is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_postgres_flow_queue_claims_distinct_rows_concurrently(
+    migrated_postgres_url: str,
+):
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    project_id = f"flow-queue-project-{uuid4()}"
+    executions = [
+        _execution(
+            "planning",
+            project_id=project_id,
+            workflow_id=f"flow-queue-workflow-{uuid4()}",
+        )
+        for _ in range(2)
+    ]
+
+    async def claim_next():
+        async with session_factory() as session:
+            return await SqlAlchemyAgentFlowStore(session).claim_next(
+                worker_id=f"postgres-worker-{uuid4()}",
+                lease_seconds=60,
+            )
+
+    try:
+        async with session_factory() as session:
+            store = SqlAlchemyAgentFlowStore(session)
+            queued = [
+                await store.enqueue(execution, max_steps=index + 3)
+                for index, execution in enumerate(executions)
+            ]
+            assert [flow.status for flow in queued] == [
+                AgentFlowStatus.QUEUED,
+                AgentFlowStatus.QUEUED,
+            ]
+            assert [flow.execution_options.max_steps for flow in queued] == [3, 4]
+
+        claims = await asyncio.gather(claim_next(), claim_next())
+
+        assert all(claim is not None for claim in claims)
+        claimed = [claim for claim in claims if claim is not None]
+        assert len({claim.flow_id for claim in claimed}) == 2
+        assert {claim.flow_id for claim in claimed} == {flow.flow_id for flow in queued}
+        assert all(claim.status == AgentFlowStatus.RUNNING for claim in claimed)
+        assert all(claim.version == 2 for claim in claimed)
+
+        execution_by_workflow = {
+            execution.workflow_id: execution for execution in executions
+        }
+        for claim in claimed:
+            async with session_factory() as session:
+                completed = await SqlAlchemyAgentFlowStore(session).complete_run(
+                    flow_id=claim.flow_id,
+                    result=_flow_result(
+                        execution_by_workflow[claim.workflow_id],
+                        status=AgentFlowStatus.COMPLETED,
+                        next_action=AgentNextAction.COMPLETE,
+                    ),
+                    expected_version=claim.version,
+                    lease_id=claim.lease.lease_id,
+                )
+                assert completed.status == AgentFlowStatus.COMPLETED
     finally:
         await engine.dispose()

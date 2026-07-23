@@ -50,14 +50,19 @@ it from the pending aggregate payload.
 {
   "flow_runtime": {
     "lease_seconds": 300,
-    "recovery_enabled": true
+    "heartbeat_seconds": 60,
+    "worker_poll_seconds": 2,
+    "recovery_enabled": true,
+    "max_recovery_attempts": 3
   }
 }
 ```
 
 Synchronous API execution does not run a concurrent database heartbeat. Configure
-`lease_seconds` above the longest expected synchronous flow duration. External workers that own
-longer claims should call heartbeat before expiry.
+`lease_seconds` above the longest expected synchronous flow duration. Asynchronous flows submitted
+through `POST /v1/agents/flows/async` are claimed by `agent-flow-worker`, which heartbeats through
+an independent database session. Automatic recovery is bounded; exhausted flows are escalated
+without deleting their pending request.
 
 ## Persistence
 

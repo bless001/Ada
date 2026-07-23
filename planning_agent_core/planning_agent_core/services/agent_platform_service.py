@@ -49,6 +49,15 @@ class AgentPlatformService:
     async def execute(self, request: AgentExecutionRequest) -> AgentOrchestrationResult:
         return await self.orchestrator.run_once(request)
 
+    async def enqueue_flow(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        max_steps: int = 10,
+    ) -> PersistedAgentFlow:
+        self._require_flow_store()
+        return await self.flow_store.enqueue(request, max_steps=max_steps)
+
     async def execute_flow(
         self,
         request: AgentExecutionRequest,
@@ -246,6 +255,32 @@ class AgentPlatformService:
             lease_id=_active_lease_id(reservation),
         )
 
+    async def execute_claimed_flow(
+        self,
+        *,
+        claim: PersistedAgentFlow,
+        request: AgentExecutionRequest,
+        transition_resolver: AgentTransitionRequestResolver | None = None,
+        max_steps: int = 10,
+    ) -> PersistedAgentFlow:
+        self._require_flow_store()
+        if max_steps < 1:
+            raise ValueError("max_steps must be at least 1")
+        _validate_claimed_execution(claim, request)
+        flow_orchestrator = AgentFlowOrchestrator(
+            step_orchestrator=self.orchestrator,
+            transition_resolver=(
+                transition_resolver if transition_resolver is not None else self.transition_resolver
+            ),
+        )
+        result = await flow_orchestrator.run(request, max_steps=max_steps)
+        return await self.flow_store.complete_run(
+            flow_id=claim.flow_id,
+            result=result,
+            expected_version=claim.version,
+            lease_id=_active_lease_id(claim),
+        )
+
     def _require_flow_store(self) -> None:
         if self.flow_store is None:
             raise RuntimeError("Agent flow persistence is not configured")
@@ -308,6 +343,17 @@ def _validate_recovery_request(
         raise AgentValidationError(
             "Recovery request must exactly match the pending execution payload"
         )
+
+
+def _validate_claimed_execution(
+    flow: PersistedAgentFlow,
+    request: AgentExecutionRequest,
+) -> None:
+    if flow.status != AgentFlowStatus.RUNNING:
+        raise AgentValidationError(f"Agent flow claim is not running: {flow.status.value}")
+    if flow.lease is None:
+        raise AgentValidationError("Agent flow claim has no active lease")
+    _validate_recovery_request(flow, request)
 
 
 def _lease_owner(prefix: str, request: AgentExecutionRequest) -> str:

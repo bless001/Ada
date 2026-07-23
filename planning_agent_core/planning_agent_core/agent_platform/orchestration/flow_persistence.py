@@ -66,6 +66,10 @@ class AgentFlowRecoveryRecord(BaseModel):
     replacement_lease: AgentFlowLease
 
 
+class AgentFlowExecutionOptions(BaseModel):
+    max_steps: int = Field(default=10, ge=1, le=100)
+
+
 class AgentFlowStepRecord(BaseModel):
     sequence: int = Field(ge=1)
     agent_type: str
@@ -96,12 +100,20 @@ class PersistedAgentFlow(BaseModel):
     approvals: list[AgentFlowApproval] = Field(default_factory=list)
     lease: AgentFlowLease | None = None
     recoveries: list[AgentFlowRecoveryRecord] = Field(default_factory=list)
+    execution_options: AgentFlowExecutionOptions = Field(default_factory=AgentFlowExecutionOptions)
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
 
 
 @runtime_checkable
 class AgentFlowStore(Protocol):
+    async def enqueue(
+        self,
+        execution: AgentExecutionRequest,
+        *,
+        max_steps: int = 10,
+    ) -> PersistedAgentFlow: ...
+
     async def reserve(
         self,
         execution: AgentExecutionRequest,
@@ -130,6 +142,15 @@ class AgentFlowStore(Protocol):
         recovered_by: str,
         lease_seconds: int = 300,
     ) -> PersistedAgentFlow: ...
+
+    async def claim_next(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+        recover_expired: bool = True,
+        max_recovery_attempts: int = 3,
+    ) -> PersistedAgentFlow | None: ...
 
     async def renew_lease(
         self,
@@ -174,6 +195,25 @@ class InMemoryAgentFlowStore:
     def __init__(self) -> None:
         self.flows: dict[UUID, PersistedAgentFlow] = {}
         self.workflow_index: dict[tuple[str, str], UUID] = {}
+
+    async def enqueue(
+        self,
+        execution: AgentExecutionRequest,
+        *,
+        max_steps: int = 10,
+    ) -> PersistedAgentFlow:
+        identity = (
+            execution.request.project_id,
+            execution.workflow_id,
+        )
+        if identity in self.workflow_index:
+            raise AgentFlowVersionConflictError(
+                f"Agent flow already exists for workflow: {execution.workflow_id}"
+            )
+        snapshot = queue_flow_snapshot(execution, max_steps=max_steps)
+        self.flows[snapshot.flow_id] = snapshot
+        self.workflow_index[identity] = snapshot.flow_id
+        return snapshot.model_copy(deep=True)
 
     async def reserve(
         self,
@@ -242,6 +282,56 @@ class InMemoryAgentFlowStore:
         )
         self.flows[flow_id] = snapshot
         return snapshot.model_copy(deep=True)
+
+    async def claim_next(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+        recover_expired: bool = True,
+        max_recovery_attempts: int = 3,
+        now: datetime | None = None,
+    ) -> PersistedAgentFlow | None:
+        if max_recovery_attempts < 0:
+            raise ValueError("max_recovery_attempts cannot be negative")
+        claimed_at = now or _utc_now()
+        candidates = sorted(
+            self.flows.values(),
+            key=lambda flow: flow.updated_at,
+        )
+        for current in candidates:
+            if current.status == AgentFlowStatus.QUEUED:
+                snapshot = claim_queued_flow_snapshot(
+                    current,
+                    worker_id=worker_id,
+                    lease_seconds=lease_seconds,
+                    now=claimed_at,
+                )
+            elif (
+                recover_expired
+                and current.status == AgentFlowStatus.RUNNING
+                and current.lease is not None
+                and current.lease.expires_at <= claimed_at
+            ):
+                if current.recovery_count >= max_recovery_attempts:
+                    snapshot = escalate_exhausted_recovery_snapshot(
+                        current,
+                        max_recovery_attempts=max_recovery_attempts,
+                        now=claimed_at,
+                    )
+                    self.flows[current.flow_id] = snapshot
+                    continue
+                snapshot = recover_pending_flow_snapshot(
+                    current,
+                    recovered_by=worker_id,
+                    lease_seconds=lease_seconds,
+                    now=claimed_at,
+                )
+            else:
+                continue
+            self.flows[current.flow_id] = snapshot
+            return snapshot.model_copy(deep=True)
+        return None
 
     async def renew_lease(
         self,
@@ -352,6 +442,60 @@ def reserve_flow_snapshot(
     )
 
 
+def queue_flow_snapshot(
+    execution: AgentExecutionRequest,
+    *,
+    flow_id: UUID | None = None,
+    max_steps: int = 10,
+    now: datetime | None = None,
+) -> PersistedAgentFlow:
+    queued_at = now or _utc_now()
+    return PersistedAgentFlow(
+        flow_id=flow_id or uuid4(),
+        workflow_id=execution.workflow_id,
+        project_id=execution.request.project_id,
+        task_id=execution.request.task_id,
+        status=AgentFlowStatus.QUEUED,
+        version=1,
+        pending_execution_payload=execution.model_dump(mode="json"),
+        reason="Flow queued for background execution.",
+        correlation_id=execution.correlation_id,
+        execution_options=AgentFlowExecutionOptions(max_steps=max_steps),
+        created_at=queued_at,
+        updated_at=queued_at,
+    )
+
+
+def claim_queued_flow_snapshot(
+    current: PersistedAgentFlow,
+    *,
+    worker_id: str,
+    lease_seconds: int = 300,
+    now: datetime | None = None,
+) -> PersistedAgentFlow:
+    if current.status != AgentFlowStatus.QUEUED:
+        raise AgentFlowPersistenceError(
+            f"Only a queued flow can be claimed, found: {current.status.value}"
+        )
+    if current.pending_execution_payload is None:
+        raise AgentFlowPersistenceError("Queued flow has no pending execution payload")
+    claimed_at = now or _utc_now()
+    return current.model_copy(
+        deep=True,
+        update={
+            "status": AgentFlowStatus.RUNNING,
+            "version": current.version + 1,
+            "lease": _new_lease(
+                owner=worker_id,
+                lease_seconds=lease_seconds,
+                acquired_at=claimed_at,
+            ),
+            "reason": f"Queued flow claimed by {worker_id}.",
+            "updated_at": claimed_at,
+        },
+    )
+
+
 def begin_resume_snapshot(
     current: PersistedAgentFlow,
     execution: AgentExecutionRequest,
@@ -432,6 +576,37 @@ def recover_flow_snapshot(
         raise AgentFlowPersistenceError(
             "Recovery request must exactly match the pending execution payload"
         )
+    return recover_pending_flow_snapshot(
+        current,
+        recovered_by=recovered_by,
+        lease_seconds=lease_seconds,
+        now=recovered_at,
+    )
+
+
+def recover_pending_flow_snapshot(
+    current: PersistedAgentFlow,
+    *,
+    recovered_by: str,
+    lease_seconds: int = 300,
+    now: datetime | None = None,
+) -> PersistedAgentFlow:
+    if current.status != AgentFlowStatus.RUNNING:
+        raise AgentFlowPersistenceError(
+            f"Only a running flow can be recovered, found: {current.status.value}"
+        )
+    if current.lease is None:
+        raise AgentFlowPersistenceError("Running flow does not have a recovery lease")
+    if current.pending_execution_payload is None:
+        raise AgentFlowPersistenceError("Running flow has no pending execution payload")
+    recovered_at = now or _utc_now()
+    if current.lease.expires_at > recovered_at:
+        raise AgentFlowLeaseConflictError(
+            f"Agent flow lease is active until {current.lease.expires_at.isoformat()}"
+        )
+    execution_id = current.pending_execution_payload.get("request", {}).get("execution_id")
+    if execution_id is None:
+        raise AgentFlowPersistenceError("Pending execution payload has no execution_id")
     replacement_lease = _new_lease(
         owner=recovered_by,
         lease_seconds=lease_seconds,
@@ -439,7 +614,7 @@ def recover_flow_snapshot(
     )
     recovery = AgentFlowRecoveryRecord(
         sequence=current.recovery_count + 1,
-        execution_id=execution.request.execution_id,
+        execution_id=UUID(str(execution_id)),
         recovered_by=recovered_by,
         recovered_at=recovered_at,
         previous_lease=current.lease,
@@ -454,6 +629,38 @@ def recover_flow_snapshot(
             "lease": replacement_lease,
             "reason": f"Expired flow lease recovered by {recovered_by}.",
             "updated_at": recovered_at,
+        },
+    )
+
+
+def escalate_exhausted_recovery_snapshot(
+    current: PersistedAgentFlow,
+    *,
+    max_recovery_attempts: int,
+    now: datetime | None = None,
+) -> PersistedAgentFlow:
+    if current.status != AgentFlowStatus.RUNNING:
+        raise AgentFlowPersistenceError(
+            f"Only a running flow can exhaust recovery, found: {current.status.value}"
+        )
+    if max_recovery_attempts < 0:
+        raise ValueError("max_recovery_attempts cannot be negative")
+    if current.recovery_count < max_recovery_attempts:
+        raise AgentFlowPersistenceError(
+            "Agent flow has not exhausted its automatic recovery attempts"
+        )
+    escalated_at = now or _utc_now()
+    return current.model_copy(
+        deep=True,
+        update={
+            "status": AgentFlowStatus.ESCALATED,
+            "version": current.version + 1,
+            "lease": None,
+            "reason": (
+                "Automatic recovery attempts exhausted "
+                f"({max_recovery_attempts}); human intervention is required."
+            ),
+            "updated_at": escalated_at,
         },
     )
 

@@ -13,6 +13,7 @@ from planning_agent_core.agent_platform.orchestration.routing import AgentRouteD
 
 
 class AgentFlowStatus(StrEnum):
+    QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
     WAITING_FOR_APPROVAL = "waiting_for_approval"

@@ -78,7 +78,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
     with psycopg.connect(_to_psycopg_url(migrated_postgres_url)) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
-            assert cur.fetchone()[0] == "0013_agent_flow_recovery_leases"
+            assert cur.fetchone()[0] == "0014_queued_agent_flows"
 
             cur.execute(
                 """
@@ -157,6 +157,18 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                 "lease_acquired_at",
                 "lease_expires_at",
             } <= flow_columns
+
+            cur.execute(
+                """
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND tablename = 'agent_platform_flows'
+                """
+            )
+            assert "idx_agent_platform_flows_claimable" in {
+                row[0] for row in cur.fetchall()
+            }
 
             cur.execute(
                 """

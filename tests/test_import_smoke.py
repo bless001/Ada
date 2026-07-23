@@ -44,6 +44,8 @@ CORE_MODULES = [
     "planning_agent_core.persistence.agent_flows",
     "planning_agent_core.services.coding_service",
     "planning_agent_core.services.agent_platform_service",
+    "planning_agent_core.services.agent_execution_codec",
+    "planning_agent_core.services.agent_platform_composition",
     "planning_agent_core.services.repository_analysis_service",
     "planning_agent_core.services.repository_projection_service",
     "planning_agent_core.services.repository_write_tracker",
@@ -57,6 +59,7 @@ CORE_MODULES = [
     "planning_agent_core.agent_platform.factory",
     "planning_agent_core.agent_platform.orchestration",
     "planning_agent_core.agent_platform.runtime",
+    "planning_agent_core.workers.agent_flow_worker",
 ]
 
 

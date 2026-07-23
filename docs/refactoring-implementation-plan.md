@@ -169,6 +169,8 @@ The general agent platform foundation has been added under `planning_agent_core/
   `docs/agent-platform-flow-persistence-results.md`.
 - Interrupted-flow leases, heartbeat, discovery, and exact-request recovery are recorded in
   `docs/agent-platform-flow-recovery-results.md`.
+- PostgreSQL flow queueing and the automatic-heartbeat worker are recorded in
+  `docs/agent-platform-background-worker-results.md`.
 
 ## Phase 3: Persistence And Event Ingestion
 

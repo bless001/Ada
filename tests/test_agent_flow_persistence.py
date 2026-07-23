@@ -179,6 +179,97 @@ async def test_in_memory_store_reserves_before_appending_completed_step():
 
 
 @pytest.mark.asyncio
+async def test_service_enqueues_claims_and_executes_background_flow():
+    store = InMemoryAgentFlowStore()
+    execution = _execution()
+    outcome = _outcome(
+        execution,
+        next_action=AgentNextAction.COMPLETE,
+        next_agent_type=None,
+    )
+    orchestrator = ScriptedStepOrchestrator([outcome])
+    service = AgentPlatformService(
+        dependencies=AgentDependencyContainer(),
+        orchestrator=orchestrator,
+        flow_store=store,
+    )
+
+    queued = await service.enqueue_flow(execution, max_steps=7)
+
+    assert queued.status == AgentFlowStatus.QUEUED
+    assert queued.version == 1
+    assert queued.lease is None
+    assert queued.execution_options.max_steps == 7
+    assert orchestrator.calls == []
+
+    claim = await store.claim_next(worker_id="background-worker")
+    assert claim is not None
+    assert claim.status == AgentFlowStatus.RUNNING
+    assert claim.version == 2
+    assert claim.lease.owner == "background-worker"
+
+    completed = await service.execute_claimed_flow(
+        claim=claim,
+        request=execution,
+        max_steps=claim.execution_options.max_steps,
+    )
+
+    assert completed.status == AgentFlowStatus.COMPLETED
+    assert completed.version == 3
+    assert completed.step_count == 1
+    assert completed.lease is None
+    assert orchestrator.calls == [execution]
+
+
+@pytest.mark.asyncio
+async def test_claim_next_honors_recovery_policy_and_escalates_exhausted_flow():
+    store = InMemoryAgentFlowStore()
+    execution = _execution()
+    reserved = await store.reserve(execution, lease_seconds=60)
+    expired_at = reserved.lease.expires_at
+
+    disabled = await store.claim_next(
+        worker_id="background-worker",
+        recover_expired=False,
+        now=expired_at,
+    )
+    assert disabled is None
+
+    exhausted = await store.claim_next(
+        worker_id="background-worker",
+        max_recovery_attempts=0,
+        now=expired_at,
+    )
+    assert exhausted is None
+
+    escalated = await store.get(reserved.flow_id)
+    assert escalated is not None
+    assert escalated.status == AgentFlowStatus.ESCALATED
+    assert escalated.version == 2
+    assert escalated.lease is None
+    assert escalated.pending_execution_payload == reserved.pending_execution_payload
+    assert "human intervention" in escalated.reason
+
+
+@pytest.mark.asyncio
+async def test_claim_next_uses_oldest_first_order_across_queue_and_recovery():
+    store = InMemoryAgentFlowStore()
+    abandoned_execution = _execution(workflow_id="abandoned-workflow")
+    abandoned = await store.reserve(abandoned_execution, lease_seconds=60)
+    await store.enqueue(_execution(workflow_id="new-queued-workflow"))
+
+    claimed = await store.claim_next(
+        worker_id="recovery-worker",
+        now=abandoned.lease.expires_at,
+    )
+
+    assert claimed is not None
+    assert claimed.flow_id == abandoned.flow_id
+    assert claimed.recovery_count == 1
+    assert claimed.lease.owner == "recovery-worker"
+
+
+@pytest.mark.asyncio
 async def test_in_memory_store_rejects_duplicate_workflow_and_stale_version():
     store = InMemoryAgentFlowStore()
     execution = _execution()

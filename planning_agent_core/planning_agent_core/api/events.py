@@ -3,11 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from planning_agent_core.api.agents import create_agent_platform_service_for_db
 from planning_agent_core.api.deps import get_db
 from planning_agent_core.application.project_orchestrator import ProjectEventOrchestrator
 from planning_agent_core.persistence.executions import SqlAlchemyAgentExecutionRecorder
 from planning_agent_core.persistence.event_inbox import SqlAlchemyEventInbox
+from planning_agent_core.services.agent_platform_composition import (
+    create_agent_platform_service_for_db,
+)
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
 

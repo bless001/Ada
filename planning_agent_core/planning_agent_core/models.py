@@ -638,7 +638,7 @@ class AgentPlatformFlowRecord(Base):
         ),
         CheckConstraint(
             "status IN ("
-            "'running', 'completed', 'waiting_for_approval', "
+            "'queued', 'running', 'completed', 'waiting_for_approval', "
             "'waiting_for_clarification', 'transition_pending', 'escalated', "
             "'max_steps_exceeded', 'changes_requested', 'cancelled'"
             ")",
@@ -659,6 +659,11 @@ class AgentPlatformFlowRecord(Base):
             "idx_agent_platform_flows_recoverable",
             "status",
             "lease_expires_at",
+        ),
+        Index(
+            "idx_agent_platform_flows_claimable",
+            "status",
+            "updated_at",
         ),
     )
 

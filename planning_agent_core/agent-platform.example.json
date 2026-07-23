@@ -7,7 +7,10 @@
   },
   "flow_runtime": {
     "lease_seconds": 300,
-    "recovery_enabled": true
+    "heartbeat_seconds": 60,
+    "worker_poll_seconds": 2,
+    "recovery_enabled": true,
+    "max_recovery_attempts": 3
   },
   "agents": {
     "planning": {

@@ -17,6 +17,7 @@ from planning_agent_core.agent_platform.orchestration.orchestrator import (
 )
 from planning_agent_core.agent_platform.orchestration.flow_persistence import (
     AgentFlowApproval,
+    AgentFlowExecutionOptions,
     AgentFlowLease,
     AgentFlowLeaseConflictError,
     AgentFlowNotFoundError,
@@ -45,6 +46,7 @@ __all__ = [
     "AgentExecutionRequest",
     "AgentFlowOrchestrator",
     "AgentFlowApproval",
+    "AgentFlowExecutionOptions",
     "AgentFlowLease",
     "AgentFlowLeaseConflictError",
     "AgentFlowNotFoundError",

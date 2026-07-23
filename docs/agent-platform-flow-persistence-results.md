@@ -80,8 +80,9 @@ same typed request, including execution ID, objective, configuration, metadata, 
 correlation identity. Recovery replaces the token and increments the version, so the stale worker
 cannot commit even if it later returns.
 
-Recovery remains an explicit operation rather than an automatic replay because repository and
-external side effects require operator or worker-level idempotency judgment.
+Manual recovery remains explicit through the recovery endpoint. The later background worker may
+automatically recover expired asynchronous claims when configured, with a bounded attempt count.
+Repository and external side effects still require idempotent skills and adapters.
 
 ## Compatibility
 

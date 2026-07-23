@@ -54,6 +54,7 @@ FastAPI exposes one-step compatibility execution through `POST /v1/agents/execut
 multi-agent flows use:
 
 - `POST /v1/agents/flows` to reserve and execute a new flow.
+- `POST /v1/agents/flows/async` to persist a queued flow and return `202 Accepted`.
 - `GET /v1/agents/flows/by-workflow` to discover a flow after a failed start response.
 - `GET /v1/agents/flows/{flow_id}` to inspect its aggregate state and audit history.
 - `POST /v1/agents/flows/{flow_id}/heartbeat` to extend an active running lease.
@@ -240,11 +241,19 @@ reserves the aggregate before invoking an agent and commits the resulting step h
 `start_flow` requires persistence and returns the durable snapshot. `resume_flow` claims the
 expected aggregate version before running the next typed request.
 
+`enqueue_flow` persists the same typed request with `queued` status and its bounded execution
+options without invoking an agent. `AgentFlowWorker` claims queued rows with PostgreSQL
+`FOR UPDATE SKIP LOCKED`, decodes the request through a registry-backed codec, and calls
+`execute_claimed_flow`. Agents remain unaware of the worker and do not call one another.
+
 Every running claim has a unique lease token, owner, acquisition time, and expiry. Completion must
 present the current token and aggregate version. Heartbeat extends the same token without changing
 the version. Recovery is permitted only after lease expiry, requires an exact replay of the
 persisted typed execution request, replaces the token, increments the version, and records both
 leases in append-only recovery history. A stale worker can therefore no longer commit.
+The background worker uses a separate SQLAlchemy session for execution and for each heartbeat.
+Expired claims are recovered only when configured, and bounded automatic recovery transitions an
+exhausted flow to `escalated` while retaining its pending request.
 
 Approval is data, not an implicit flag. A flow waiting for approval requires an
 `AgentFlowApproval` containing a decision and stable external reference. Approved flows require a
@@ -291,6 +300,9 @@ Migration `0013_agent_flow_recovery_leases` marks legacy running rows as immedia
 recoverable. Paused and completed rows remain unleased. Database reads merge the indexed lease
 columns into legacy JSON aggregates until the next aggregate write normalizes the JSON payload.
 
+Migration `0014_queued_agent_flows` adds the `queued` aggregate status. PostgreSQL is the durable
+flow queue; no second queue message must be reconciled with the aggregate.
+
 PostgreSQL-backed LangGraph checkpointing remains available in the existing workflow package for internal LangGraph workflows and can be used inside each agent where needed.
 
 ## Adapters And Dependency Injection
@@ -327,7 +339,9 @@ The platform configuration is represented by:
 - `AgentFlowRuntimeConfig`
 - `LLMEndpointConfig`
 
-The loader accepts JSON and returns a deep copy of the default config when no path is provided. Example configuration is in `planning_agent_core/agent-platform.example.json`.
+The loader accepts JSON, discovers the runtime path from `AGENT_PLATFORM_CONFIG_FILE`, and returns
+a deep copy of the default config when no explicit or environment path is provided. Example
+configuration is in `planning_agent_core/agent-platform.example.json`.
 
 The LLM endpoint remains configurable by:
 
@@ -341,10 +355,15 @@ No llama.cpp endpoint is hard-coded.
 Flow runtime configuration controls:
 
 - `lease_seconds`
+- `heartbeat_seconds`
+- `worker_poll_seconds`
 - `recovery_enabled`
+- `max_recovery_attempts`
 
 For synchronous API execution, `lease_seconds` must exceed the longest expected run. An external
-worker that owns a long-running claim should heartbeat before expiry.
+worker that owns a long-running claim should heartbeat before expiry. The included
+`agent-flow-worker` performs heartbeats automatically for flows accepted through
+`POST /v1/agents/flows/async`.
 
 ## Observability
 
@@ -377,6 +396,8 @@ The new platform test suite covers:
   rejection, optimistic version conflicts, and pending-request preservation on execution failure.
 - Active-lease takeover rejection, heartbeat renewal without version churn, exact-request recovery,
   stale-token completion rejection, recovery-disable configuration, and workflow discovery.
+- Queued execution, typed request decoding, independent heartbeat sessions, oldest-first concurrent
+  claims, bounded automatic recovery, and exhausted-flow escalation.
 - Production transition resolution from persisted tasks, approvals, context capsules, coding
   checkpoints, and coding results.
 - Live PostgreSQL flow persistence, JSONB reloading, indexed aggregate fields, and migration-head

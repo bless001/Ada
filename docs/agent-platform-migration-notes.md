@@ -53,6 +53,10 @@ Current infrastructure ports:
 - `planning_agent_core/alembic/versions/0011_agent_platform_persistence.py`
 - `planning_agent_core/alembic/versions/0012_agent_platform_flows.py`
 - `planning_agent_core/alembic/versions/0013_agent_flow_recovery_leases.py`
+- `planning_agent_core/alembic/versions/0014_queued_agent_flows.py`
+- `planning_agent_core/planning_agent_core/workers/agent_flow_worker.py`
+- `planning_agent_core/planning_agent_core/services/agent_execution_codec.py`
+- `planning_agent_core/planning_agent_core/services/agent_platform_composition.py`
 - `tests/test_agent_platform.py`
 - `tests/test_agent_flow_persistence.py`
 - `tests/test_agent_flow_postgres_integration.py`
@@ -80,6 +84,8 @@ Current infrastructure ports:
   must apply their normal secret-redaction and retention policy to request metadata and artifacts.
 - Recovery replays must use the exact pending execution payload. Callers should fetch the aggregate
   by flow ID or workflow identity instead of constructing a replacement objective or configuration.
+- Automatic recovery can repeat idempotent agent work after a lost lease. Keep external writes
+  idempotent, configure a bounded attempt count, and monitor flows that transition to `escalated`.
 - Agent config currently uses JSON loading. YAML can be added later if a dependency is acceptable.
 
 ## Migration Steps
@@ -101,9 +107,13 @@ Current infrastructure ports:
     decide whether recovery is enabled.
 12. Heartbeat long-running externally owned claims before expiry; recover only expired claims using
     their exact pending request.
-13. Move OpenProject, Neo4j, Weaviate, and repository indexing triggers behind orchestrator-driven events.
-14. Add richer agent workflows internally without changing factory or orchestrator code.
-15. Retire legacy direct workflow entry points only after API and integration tests prove parity.
+13. Apply migration `0014_queued_agent_flows` and start `agent-flow-worker` before sending requests
+    to `POST /v1/agents/flows/async`.
+14. Configure heartbeat, polling, recovery enablement, and bounded recovery attempts under
+    `flow_runtime`.
+15. Move OpenProject, Neo4j, Weaviate, and repository indexing triggers behind orchestrator-driven events.
+16. Add richer agent workflows internally without changing factory or orchestrator code.
+17. Retire legacy direct workflow entry points only after API and integration tests prove parity.
 
 ## Example Flow
 

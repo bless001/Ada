@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +21,14 @@ from planning_agent_core.agent_platform.orchestration.flow_persistence import (
     AgentFlowVersionConflictError,
     PersistedAgentFlow,
     begin_resume_snapshot,
+    claim_queued_flow_snapshot,
     close_flow_snapshot,
     complete_run_snapshot,
+    escalate_exhausted_recovery_snapshot,
     recover_flow_snapshot,
+    recover_pending_flow_snapshot,
     renew_flow_lease_snapshot,
+    queue_flow_snapshot,
     reserve_flow_snapshot,
 )
 from planning_agent_core.models import AgentPlatformFlowRecord
@@ -33,6 +37,28 @@ from planning_agent_core.models import AgentPlatformFlowRecord
 class SqlAlchemyAgentFlowStore:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def enqueue(
+        self,
+        execution: AgentExecutionRequest,
+        *,
+        max_steps: int = 10,
+    ) -> PersistedAgentFlow:
+        snapshot = queue_flow_snapshot(execution, max_steps=max_steps)
+        record = AgentPlatformFlowRecord(id=snapshot.flow_id)
+        _write_snapshot(record, snapshot)
+        self.db.add(record)
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise AgentFlowVersionConflictError(
+                f"Agent flow already exists for workflow: {execution.workflow_id}"
+            ) from exc
+        except Exception:
+            await self.db.rollback()
+            raise
+        return snapshot
 
     async def reserve(
         self,
@@ -113,6 +139,70 @@ class SqlAlchemyAgentFlowStore:
             _write_snapshot(record, snapshot)
             await self.db.commit()
             return snapshot
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def claim_next(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+        recover_expired: bool = True,
+        max_recovery_attempts: int = 3,
+        now: datetime | None = None,
+    ) -> PersistedAgentFlow | None:
+        if max_recovery_attempts < 0:
+            raise ValueError("max_recovery_attempts cannot be negative")
+        claimed_at = now or datetime.now(timezone.utc)
+        claimable = AgentPlatformFlowRecord.status == AgentFlowStatus.QUEUED.value
+        if recover_expired:
+            claimable = or_(
+                claimable,
+                and_(
+                    AgentPlatformFlowRecord.status == AgentFlowStatus.RUNNING.value,
+                    AgentPlatformFlowRecord.lease_expires_at <= claimed_at,
+                ),
+            )
+        try:
+            while True:
+                record = await self.db.scalar(
+                    select(AgentPlatformFlowRecord)
+                    .where(claimable)
+                    .order_by(AgentPlatformFlowRecord.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
+                )
+                if record is None:
+                    await self.db.rollback()
+                    return None
+                current = _read_snapshot(record)
+                if current.status == AgentFlowStatus.QUEUED:
+                    snapshot = claim_queued_flow_snapshot(
+                        current,
+                        worker_id=worker_id,
+                        lease_seconds=lease_seconds,
+                        now=claimed_at,
+                    )
+                else:
+                    if current.recovery_count >= max_recovery_attempts:
+                        snapshot = escalate_exhausted_recovery_snapshot(
+                            current,
+                            max_recovery_attempts=max_recovery_attempts,
+                            now=claimed_at,
+                        )
+                        _write_snapshot(record, snapshot)
+                        await self.db.commit()
+                        continue
+                    snapshot = recover_pending_flow_snapshot(
+                        current,
+                        recovered_by=worker_id,
+                        lease_seconds=lease_seconds,
+                        now=claimed_at,
+                    )
+                _write_snapshot(record, snapshot)
+                await self.db.commit()
+                return snapshot
         except Exception:
             await self.db.rollback()
             raise

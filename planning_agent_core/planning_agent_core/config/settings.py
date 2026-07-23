@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from socket import gethostname
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -70,6 +72,7 @@ class Settings(BaseSettings):
     worker_concurrency: int = 2
     worker_lease_seconds: int = 300
     worker_max_event_attempts: int = 5
+    flow_worker_id: str = Field(default_factory=gethostname)
 
     @property
     def neo4j_user(self) -> str:
