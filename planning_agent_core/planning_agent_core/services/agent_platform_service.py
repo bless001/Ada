@@ -21,6 +21,7 @@ class AgentPlatformService:
         dependencies: AgentDependencyContainer,
         factory: AgentFactory | None = None,
         orchestrator: AgentOrchestrator | None = None,
+        transition_resolver: AgentTransitionRequestResolver | None = None,
     ) -> None:
         self.dependencies = dependencies
         self.factory = factory or create_default_agent_factory(dependencies)
@@ -28,6 +29,7 @@ class AgentPlatformService:
             factory=self.factory,
             dependencies=dependencies,
         )
+        self.transition_resolver = transition_resolver
 
     async def execute(self, request: AgentExecutionRequest) -> AgentOrchestrationResult:
         return await self.orchestrator.run_once(request)
@@ -41,12 +43,19 @@ class AgentPlatformService:
     ) -> AgentFlowResult:
         flow_orchestrator = AgentFlowOrchestrator(
             step_orchestrator=self.orchestrator,
-            transition_resolver=transition_resolver,
+            transition_resolver=(
+                transition_resolver if transition_resolver is not None else self.transition_resolver
+            ),
         )
         return await flow_orchestrator.run(request, max_steps=max_steps)
 
 
 def create_agent_platform_service(
     dependencies: AgentDependencyContainer | None = None,
+    *,
+    transition_resolver: AgentTransitionRequestResolver | None = None,
 ) -> AgentPlatformService:
-    return AgentPlatformService(dependencies=dependencies or AgentDependencyContainer())
+    return AgentPlatformService(
+        dependencies=dependencies or AgentDependencyContainer(),
+        transition_resolver=transition_resolver,
+    )

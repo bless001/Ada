@@ -199,6 +199,17 @@ criteria, coding results, or approval records and convert them into the next age
 generic orchestrator only checks that the returned request matches the requested route and retains
 flow identity.
 
+Database-backed application composition uses `ApplicationAgentTransitionResolver` with
+`SqlAlchemyAgentTransitionContextStore`. The store reads the selected plan task, acceptance
+criteria, approval state, context capsules, external artifacts, coding checkpoints, and coding
+results. The resolver then constructs the specialized Planning, Coding, or Verification request.
+It pins downstream lookup to the plan version propagated in transition metadata.
+
+Because the current Coding Agent requires an explicit `CodingAttemptRequest`, coding transitions
+only continue when a context capsule contains `prepared_coding_attempt` for initial work or
+`prepared_rework_attempt` for verification rework. Missing durable input produces
+`transition_pending`; the resolver does not invent file changes.
+
 Agents never call each other directly. The orchestrator maps next actions to route decisions:
 
 - `run_planning` routes to Planning Agent.
@@ -307,6 +318,8 @@ The new platform test suite covers:
 - Orchestration transitions for planning approval, coding to verification, verification rework, verification blocked, planning clarification, and coding blocked.
 - Multi-step flow completion, approval and clarification pauses, pending transition input,
   retry limits, and cross-workflow handoff rejection.
+- Production transition resolution from persisted tasks, approvals, context capsules, coding
+  checkpoints, and coding results.
 - Checkpoint namespace isolation and failure checkpoint preservation.
 
 The tests use fake dependencies and do not require Docker, OpenProject, Neo4j, Weaviate, or a live LLM.

@@ -23,6 +23,10 @@ from planning_agent_core.agent_platform.orchestration.transitions import (
     AgentTransition,
     decide_next_transition,
 )
+from planning_agent_core.agent_platform.orchestration.transition_context import (
+    AgentTaskTransitionContext,
+    AgentTransitionContextStore,
+)
 
 __all__ = [
     "AgentExecutionRequest",
@@ -34,6 +38,8 @@ __all__ = [
     "AgentOrchestrator",
     "AgentRouteDecision",
     "AgentTransition",
+    "AgentTaskTransitionContext",
+    "AgentTransitionContextStore",
     "AgentTransitionRequestResolver",
     "InMemoryAgentResultStore",
     "InMemoryTransitionRequestResolver",

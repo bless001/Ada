@@ -6,7 +6,11 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from planning_agent_core.agent_platform.agents.base import AgentNextAction, AgentResult, AgentRunStatus
+from planning_agent_core.agent_platform.agents.base import (
+    AgentNextAction,
+    AgentResult,
+    AgentRunStatus,
+)
 from planning_agent_core.agent_platform.agents.coding import CodingAgentRequest
 from planning_agent_core.agent_platform.agents.planning import PlanningAgentRequest
 from planning_agent_core.agent_platform.config import AgentConfig
@@ -16,7 +20,11 @@ from planning_agent_core.agent_platform.orchestration import (
     PersistedAgentResult,
 )
 from planning_agent_core.api.agents import AgentExecutePayload, execute_agent
+from planning_agent_core.api.agents import create_agent_platform_service_for_db
 from planning_agent_core.domain.coding import CodingAttemptRequest, FileChange
+from planning_agent_core.services.agent_transition_resolver import (
+    ApplicationAgentTransitionResolver,
+)
 
 
 class FakeAgentPlatformService:
@@ -74,6 +82,18 @@ def test_agent_execute_payload_discriminates_coding_request():
     assert payload.request.coding_attempt.repository_key == "sample-project"
 
 
+def test_database_platform_service_includes_production_transition_resolver():
+    db = object()
+
+    service = create_agent_platform_service_for_db(db)
+
+    assert isinstance(
+        service.transition_resolver,
+        ApplicationAgentTransitionResolver,
+    )
+    assert service.transition_resolver.context_store.db is db
+
+
 @pytest.mark.asyncio
 async def test_execute_agent_uses_default_config_and_service(monkeypatch):
     fake_service = FakeAgentPlatformService()
@@ -115,7 +135,9 @@ async def test_execute_agent_rejects_mismatched_config(monkeypatch):
             coding_attempt=CodingAttemptRequest(
                 task_key="task.sample",
                 repository_key="sample-project",
-                file_changes=[FileChange(relative_path="src/app.py", content="VALUE = 'new'\n")],
+                file_changes=[
+                    FileChange(relative_path="src/app.py", content="VALUE = 'new'\n")
+                ],
             ),
         ),
         config=AgentConfig(agent_type="planning", checkpoint_namespace="planning"),

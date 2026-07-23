@@ -163,6 +163,8 @@ The general agent platform foundation has been added under `planning_agent_core/
 - Event orchestration through the platform is recorded in `docs/agent-platform-event-orchestration-results.md`.
 - Bounded multi-agent flow orchestration is recorded in
   `docs/agent-platform-flow-orchestration-results.md`.
+- Production request handoffs from persisted transition context are recorded in
+  `docs/agent-platform-transition-resolver-results.md`.
 
 ## Phase 3: Persistence And Event Ingestion
 

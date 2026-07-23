@@ -36,6 +36,10 @@ with the pending route. Approval and clarification produce their own waiting sta
 can resume by starting a new flow with the approved or clarified typed request and the same
 `workflow_id`.
 
+Database-backed platform construction now supplies `ApplicationAgentTransitionResolver` by
+default. Its implementation and persisted context contract are recorded in
+`docs/agent-platform-transition-resolver-results.md`.
+
 ## Validation
 
 Commands run:

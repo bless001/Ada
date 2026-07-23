@@ -22,6 +22,8 @@ Added a modular `agent_platform` package that generalizes the existing planning-
 - OpenProject event orchestration now uses `AgentPlatformService` for resumable planning events when configured.
 - `AgentPlatformService.execute_flow` now exposes multi-step orchestration while preserving the
   existing one-step execution entry point.
+- Database-backed platform services now inject `ApplicationAgentTransitionResolver`, which builds
+  typed coding and verification handoffs from persisted task context.
 - JSON configuration models, default config, loader, and example config.
 - Lazy `planning_agent_core.skills` package initialization so platform imports do not require LLM environment settings.
 - Contract, factory, orchestration, and checkpoint tests using fake dependencies.
@@ -49,12 +51,11 @@ Results:
 
 - Ruff: passed.
 - Focused platform and flow tests: 28 passed.
-- Full test suite: 143 passed, 11 skipped, 4 existing warnings.
+- Full test suite with PostgreSQL integrations enabled: 163 passed, 2 skipped, 4 existing
+  warnings.
 
 ## Remaining Follow-Up
 
-- Add application transition resolvers that construct coding and verification requests from
-  persisted plan, approval, task, artifact, and coding-result records.
 - Add a durable flow execution record around the already durable per-agent results and checkpoints.
 - Expand internal LangGraph workflows inside each agent without coupling agents into one graph.
 - Add richer verification skills for acceptance matrix, regression risk, security/config review, and test adequacy.

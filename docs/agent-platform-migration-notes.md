@@ -79,8 +79,8 @@ Current infrastructure ports:
 4. Route persisted OpenProject planning feedback through `ProjectEventOrchestrator` with `agent_platform_service`.
 5. Wrap approved coding attempts in `CodingAgentRequest` and invoke through the same orchestrator.
 6. Feed coding results and original acceptance criteria into `VerificationAgentRequest`.
-7. Add an application `AgentTransitionRequestResolver` that loads persisted artifacts and builds
-   the next typed request.
+7. Persist explicit initial or rework `CodingAttemptRequest` payloads in task context capsules when
+   automatic coding transitions are required.
 8. Use `AgentPlatformService.execute_flow` for bounded automatic transitions; keep `execute` for
    event-driven single-step execution.
 9. Replace in-memory result and checkpoint stores with PostgreSQL-backed implementations.
@@ -122,6 +122,10 @@ result = await service.execute_flow(
 The resulting flow records every agent step and returns a typed status when it completes or pauses.
 The application transition resolver converts persisted artifacts into the next agent's typed
 request. The previous agent never calls the next agent directly.
+
+Database-backed services created by `create_agent_platform_service_for_db` already inject the
+production transition resolver. Initial coding uses the `prepared_coding_attempt` context-capsule
+key; verification rework uses `prepared_rework_attempt`.
 
 ## Fourth-Agent Registration Example
 

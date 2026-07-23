@@ -22,9 +22,15 @@ from planning_agent_core.persistence.agent_platform import (
     SqlAlchemyAgentCheckpointStore,
     SqlAlchemyAgentResultStore,
 )
+from planning_agent_core.persistence.agent_transition_context import (
+    SqlAlchemyAgentTransitionContextStore,
+)
 from planning_agent_core.services.agent_platform_service import (
     AgentPlatformService,
     create_agent_platform_service,
+)
+from planning_agent_core.services.agent_transition_resolver import (
+    ApplicationAgentTransitionResolver,
 )
 from planning_agent_core.services.coding_service import CodingService
 from planning_agent_core.services.planning_service import PlanningService
@@ -85,6 +91,7 @@ async def execute_agent(
 
 
 def create_agent_platform_service_for_db(db: AsyncSession) -> AgentPlatformService:
+    platform_config = load_agent_platform_config()
     checkpoint_store = SqlAlchemyAgentCheckpointStore(db)
     result_store = SqlAlchemyAgentResultStore(db)
     dependencies = AgentDependencyContainer(
@@ -95,7 +102,14 @@ def create_agent_platform_service_for_db(db: AsyncSession) -> AgentPlatformServi
         checkpoint_store=checkpoint_store,
         result_store=result_store,
     )
-    return create_agent_platform_service(dependencies)
+    transition_resolver = ApplicationAgentTransitionResolver(
+        context_store=SqlAlchemyAgentTransitionContextStore(db),
+        config=platform_config,
+    )
+    return create_agent_platform_service(
+        dependencies,
+        transition_resolver=transition_resolver,
+    )
 
 
 def _default_config_for(agent_type: str) -> AgentConfig:
