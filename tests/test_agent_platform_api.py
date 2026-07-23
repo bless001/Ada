@@ -15,13 +15,24 @@ from planning_agent_core.agent_platform.agents.coding import CodingAgentRequest
 from planning_agent_core.agent_platform.agents.planning import PlanningAgentRequest
 from planning_agent_core.agent_platform.config import AgentConfig
 from planning_agent_core.agent_platform.orchestration import (
+    AgentFlowApproval,
+    AgentFlowVersionConflictError,
     AgentOrchestrationResult,
     AgentRouteDecision,
     PersistedAgentResult,
 )
-from planning_agent_core.api.agents import AgentExecutePayload, execute_agent
-from planning_agent_core.api.agents import create_agent_platform_service_for_db
+from planning_agent_core.api.agents import (
+    AgentExecutePayload,
+    AgentFlowResumePayload,
+    AgentFlowStartPayload,
+    create_agent_platform_service_for_db,
+    execute_agent,
+    resume_agent_flow,
+    start_agent_flow,
+)
 from planning_agent_core.domain.coding import CodingAttemptRequest, FileChange
+from planning_agent_core.domain.enums import ApprovalDecision
+from planning_agent_core.persistence.agent_flows import SqlAlchemyAgentFlowStore
 from planning_agent_core.services.agent_transition_resolver import (
     ApplicationAgentTransitionResolver,
 )
@@ -52,6 +63,27 @@ class FakeAgentPlatformService:
                 reason="Agent completed.",
             ),
         )
+
+
+class FakeFlowService:
+    def __init__(self) -> None:
+        self.calls = []
+        self.current = SimpleNamespace(
+            workflow_id="stored-workflow",
+            correlation_id="stored-correlation",
+        )
+
+    async def start_flow(self, execution, **kwargs):
+        self.calls.append(("start", execution, kwargs))
+        return "started"
+
+    async def get_flow(self, flow_id):
+        self.calls.append(("get", flow_id))
+        return self.current
+
+    async def resume_flow(self, **kwargs):
+        self.calls.append(("resume", kwargs))
+        return "resumed"
 
 
 def test_agent_execute_payload_discriminates_coding_request():
@@ -92,6 +124,8 @@ def test_database_platform_service_includes_production_transition_resolver():
         ApplicationAgentTransitionResolver,
     )
     assert service.transition_resolver.context_store.db is db
+    assert isinstance(service.flow_store, SqlAlchemyAgentFlowStore)
+    assert service.flow_store.db is db
 
 
 @pytest.mark.asyncio
@@ -148,6 +182,92 @@ async def test_execute_agent_rejects_mismatched_config(monkeypatch):
 
     assert exc.value.status_code == 422
     assert "config.agent_type" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_start_agent_flow_builds_typed_execution_request(monkeypatch):
+    fake_service = FakeFlowService()
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: fake_service,
+    )
+    payload = AgentFlowStartPayload(
+        request=PlanningAgentRequest(
+            project_id="demo",
+            objective="Create a durable plan.",
+        ),
+        workflow_id="workflow-flow-api",
+        correlation_id="correlation-flow-api",
+        max_steps=4,
+    )
+
+    response = await start_agent_flow(payload, db=object())
+
+    assert response == "started"
+    _, execution, kwargs = fake_service.calls[0]
+    assert execution.workflow_id == "workflow-flow-api"
+    assert execution.correlation_id == "correlation-flow-api"
+    assert execution.agent_type == "planning"
+    assert kwargs == {"max_steps": 4}
+
+
+@pytest.mark.asyncio
+async def test_resume_agent_flow_uses_stored_workflow_identity(monkeypatch):
+    fake_service = FakeFlowService()
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: fake_service,
+    )
+    flow_id = uuid4()
+    payload = AgentFlowResumePayload(
+        expected_version=2,
+        request=PlanningAgentRequest(
+            project_id="demo",
+            objective="Resume after approval.",
+        ),
+        correlation_id="resume-correlation",
+        approval=AgentFlowApproval(
+            decision=ApprovalDecision.APPROVED,
+            approval_reference="approval-api-1",
+        ),
+        max_steps=3,
+    )
+
+    response = await resume_agent_flow(flow_id, payload, db=object())
+
+    assert response == "resumed"
+    _, resume_kwargs = fake_service.calls[-1]
+    assert resume_kwargs["flow_id"] == flow_id
+    assert resume_kwargs["expected_version"] == 2
+    assert resume_kwargs["request"].workflow_id == "stored-workflow"
+    assert resume_kwargs["request"].correlation_id == "resume-correlation"
+    assert resume_kwargs["approval"].approval_reference == "approval-api-1"
+    assert resume_kwargs["max_steps"] == 3
+
+
+@pytest.mark.asyncio
+async def test_start_agent_flow_maps_version_conflict_to_http_409(monkeypatch):
+    class ConflictingFlowService:
+        async def start_flow(self, execution, **kwargs):
+            del execution, kwargs
+            raise AgentFlowVersionConflictError("workflow already exists")
+
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: ConflictingFlowService(),
+    )
+    payload = AgentFlowStartPayload(
+        request=PlanningAgentRequest(
+            project_id="demo",
+            objective="Create a durable plan.",
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await start_agent_flow(payload, db=object())
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "workflow already exists"
 
 
 @pytest.mark.asyncio

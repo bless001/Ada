@@ -41,6 +41,7 @@ CORE_MODULES = [
     "planning_agent_core.ports.repository_analysis",
     "planning_agent_core.persistence.coding_attempts",
     "planning_agent_core.persistence.agent_platform",
+    "planning_agent_core.persistence.agent_flows",
     "planning_agent_core.services.coding_service",
     "planning_agent_core.services.agent_platform_service",
     "planning_agent_core.services.repository_analysis_service",

@@ -165,6 +165,8 @@ The general agent platform foundation has been added under `planning_agent_core/
   `docs/agent-platform-flow-orchestration-results.md`.
 - Production request handoffs from persisted transition context are recorded in
   `docs/agent-platform-transition-resolver-results.md`.
+- Durable aggregate flow persistence, approval, and typed resume are recorded in
+  `docs/agent-platform-flow-persistence-results.md`.
 
 ## Phase 3: Persistence And Event Ingestion
 

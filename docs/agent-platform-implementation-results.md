@@ -22,6 +22,10 @@ Added a modular `agent_platform` package that generalizes the existing planning-
 - OpenProject event orchestration now uses `AgentPlatformService` for resumable planning events when configured.
 - `AgentPlatformService.execute_flow` now exposes multi-step orchestration while preserving the
   existing one-step execution entry point.
+- Durable flow start, lookup, approval, and typed resume are available through
+  `AgentPlatformService` and `/v1/agents/flows` endpoints.
+- `agent_platform_flows` persists versioned aggregate status, append-only step history, pending
+  execution input, approval evidence, and indexed transition fields.
 - Database-backed platform services now inject `ApplicationAgentTransitionResolver`, which builds
   typed coding and verification handoffs from persisted task context.
 - JSON configuration models, default config, loader, and example config.
@@ -51,12 +55,12 @@ Results:
 
 - Ruff: passed.
 - Focused platform and flow tests: 28 passed.
-- Full test suite with PostgreSQL integrations enabled: 163 passed, 2 skipped, 4 existing
+- Full test suite with PostgreSQL integrations enabled: 173 passed, 2 skipped, 4 existing
   warnings.
 
 ## Remaining Follow-Up
 
-- Add a durable flow execution record around the already durable per-agent results and checkpoints.
+- Add an operator-controlled recovery policy for flows left `running` after process interruption.
 - Expand internal LangGraph workflows inside each agent without coupling agents into one graph.
 - Add richer verification skills for acceptance matrix, regression risk, security/config review, and test adequacy.
-- Add integration tests against live Postgres/OpenProject/Neo4j/Weaviate once platform persistence adapters are implemented.
+- Add integration tests against live OpenProject/Neo4j/Weaviate for platform-driven projections.

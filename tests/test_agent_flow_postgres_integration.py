@@ -1,0 +1,215 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from planning_agent_core.agent_platform.agents.base import (
+    AgentNextAction,
+    AgentRequest,
+    AgentResult,
+    AgentRunStatus,
+)
+from planning_agent_core.agent_platform.config import AgentConfig
+from planning_agent_core.agent_platform.orchestration import (
+    AgentExecutionRequest,
+    AgentFlowApproval,
+    AgentFlowResult,
+    AgentFlowStatus,
+    AgentFlowStep,
+    AgentFlowVersionConflictError,
+    AgentOrchestrationResult,
+    AgentRouteDecision,
+    PersistedAgentResult,
+)
+from planning_agent_core.domain.enums import ApprovalDecision
+from planning_agent_core.models import AgentPlatformFlowRecord
+from planning_agent_core.persistence.agent_flows import SqlAlchemyAgentFlowStore
+
+
+POSTGRES_URL_ENV = "PHASE3_POSTGRES_DATABASE_URL"
+
+
+@pytest.fixture(scope="module")
+def migrated_postgres_url() -> str:
+    database_url = os.getenv(POSTGRES_URL_ENV)
+    if not database_url:
+        pytest.skip(f"Set {POSTGRES_URL_ENV} to run live agent-flow integration tests")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    package_root = repo_root / "planning_agent_core"
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+        cwd=package_root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    return database_url
+
+
+def _execution(
+    agent_type: str,
+    *,
+    project_id: str,
+    workflow_id: str,
+) -> AgentExecutionRequest:
+    return AgentExecutionRequest(
+        workflow_id=workflow_id,
+        agent_type=agent_type,
+        request=AgentRequest(
+            project_id=project_id,
+            task_id="task.postgres-flow",
+            agent_type=agent_type,
+            objective=f"Run {agent_type}.",
+        ),
+        config=AgentConfig(
+            agent_type=agent_type,
+            checkpoint_namespace=agent_type,
+        ),
+        correlation_id="postgres-flow-correlation",
+    )
+
+
+def _flow_result(
+    execution: AgentExecutionRequest,
+    *,
+    status: AgentFlowStatus,
+    next_action: AgentNextAction,
+    requires_approval: bool = False,
+) -> AgentFlowResult:
+    result = AgentResult(
+        execution_id=execution.request.execution_id,
+        project_id=execution.request.project_id,
+        task_id=execution.request.task_id,
+        agent_type=execution.agent_type,
+        status=AgentRunStatus.SUCCEEDED,
+        summary=f"{execution.agent_type} completed.",
+        next_action=next_action,
+    )
+    route = AgentRouteDecision(
+        next_action=next_action,
+        next_agent_type=None,
+        requires_approval=requires_approval,
+        escalate=False,
+        reason=f"Route after {execution.agent_type}.",
+    )
+    outcome = AgentOrchestrationResult(
+        result=result,
+        persisted=PersistedAgentResult(result_id=uuid4(), result=result),
+        route=route,
+    )
+    return AgentFlowResult(
+        workflow_id=execution.workflow_id,
+        status=status,
+        steps=[
+            AgentFlowStep(
+                sequence=1,
+                execution=execution,
+                outcome=outcome,
+            )
+        ],
+        final_outcome=outcome,
+        pending_route=route,
+        reason=route.reason,
+    )
+
+
+@pytest.mark.asyncio
+async def test_postgres_flow_store_persists_versioned_resume_history(
+    migrated_postgres_url: str,
+):
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    project_id = f"flow-project-{uuid4()}"
+    workflow_id = f"flow-workflow-{uuid4()}"
+
+    try:
+        async with session_factory() as session:
+            store = SqlAlchemyAgentFlowStore(session)
+            planning = _execution(
+                "planning",
+                project_id=project_id,
+                workflow_id=workflow_id,
+            )
+            reserved = await store.reserve(planning)
+            waiting = await store.complete_run(
+                flow_id=reserved.flow_id,
+                result=_flow_result(
+                    planning,
+                    status=AgentFlowStatus.WAITING_FOR_APPROVAL,
+                    next_action=AgentNextAction.REQUEST_APPROVAL,
+                    requires_approval=True,
+                ),
+                expected_version=reserved.version,
+            )
+
+            approval = AgentFlowApproval(
+                decision=ApprovalDecision.APPROVED,
+                approval_reference="postgres-approval-1",
+                actor="integration-test",
+            )
+            coding = _execution(
+                "coding",
+                project_id=project_id,
+                workflow_id=workflow_id,
+            )
+            resumed = await store.begin_resume(
+                flow_id=waiting.flow_id,
+                execution=coding,
+                expected_version=waiting.version,
+                approval=approval,
+            )
+            completed = await store.complete_run(
+                flow_id=resumed.flow_id,
+                result=_flow_result(
+                    coding,
+                    status=AgentFlowStatus.COMPLETED,
+                    next_action=AgentNextAction.COMPLETE,
+                ),
+                expected_version=resumed.version,
+            )
+
+            reloaded = await store.get(completed.flow_id)
+            assert reloaded is not None
+            assert reloaded.status == AgentFlowStatus.COMPLETED
+            assert reloaded.version == 4
+            assert reloaded.resume_count == 1
+            assert reloaded.step_count == 2
+            assert [step.agent_type for step in reloaded.steps] == [
+                "planning",
+                "coding",
+            ]
+            assert reloaded.approvals == [approval]
+
+            record = await session.get(AgentPlatformFlowRecord, completed.flow_id)
+            assert record is not None
+            assert record.status == AgentFlowStatus.COMPLETED.value
+            assert record.version == 4
+            assert record.step_count == 2
+            assert record.current_agent_type == "coding"
+            assert record.pending_agent_type is None
+            assert record.requires_approval is False
+            assert record.last_approval_decision == ApprovalDecision.APPROVED.value
+
+            with pytest.raises(
+                AgentFlowVersionConflictError,
+                match="expected 2, found 4",
+            ):
+                await store.begin_resume(
+                    flow_id=completed.flow_id,
+                    execution=coding,
+                    expected_version=2,
+                )
+            assert session.in_transaction() is False
+    finally:
+        await engine.dispose()

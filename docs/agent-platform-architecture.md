@@ -50,7 +50,16 @@ Important boundary rules:
 
 Application code can use `planning_agent_core/services/agent_platform_service.py` as the migration entry point for invoking the platform without directly constructing the factory and orchestrator.
 
-FastAPI exposes the platform through `POST /v1/agents/execute`. The route accepts a typed discriminated union of Planning, Coding, and Verification requests, creates request-scoped durable stores, and invokes `AgentPlatformService`.
+FastAPI exposes one-step compatibility execution through `POST /v1/agents/execute`. Durable
+multi-agent flows use:
+
+- `POST /v1/agents/flows` to reserve and execute a new flow.
+- `GET /v1/agents/flows/{flow_id}` to inspect its aggregate state and audit history.
+- `POST /v1/agents/flows/{flow_id}/resume` to record approval evidence or supply the next typed
+  request.
+
+The routes accept a discriminated union of Planning, Coding, and Verification requests, create
+request-scoped durable stores, and invoke `AgentPlatformService`.
 
 OpenProject event orchestration uses the same service for resumable planning events. `ProjectEventOrchestrator` builds a typed `PlanningAgentRequest` from the persisted event and waiting planning session, then invokes the platform orchestrator instead of directly calling the planning workflow runner when `agent_platform_service` is configured.
 
@@ -102,6 +111,9 @@ The one-step orchestrator accepts `AgentExecutionRequest` and returns `AgentOrch
 It preserves specialized subclass payloads using Pydantic `SerializeAsAny` while still enforcing
 the common base contract. `AgentFlowOrchestrator` composes these one-step runs into a bounded flow
 and returns `AgentFlowResult` with the complete step history and final pause or completion status.
+Durable flow boundaries use `PersistedAgentFlow`, `AgentFlowStepRecord`, and
+`AgentFlowApproval`. Raw request/result payloads are stored only as audit and recovery data; agents
+still communicate through typed contracts.
 
 ## Agent Responsibilities
 
@@ -220,15 +232,23 @@ Agents never call each other directly. The orchestrator maps next actions to rou
 - `complete` ends the flow.
 
 `AgentPlatformService.execute` remains the one-step compatibility entry point.
-`AgentPlatformService.execute_flow` runs the bounded flow. A paused flow is resumed with a new
-typed request using the same `workflow_id`; agent checkpoints remain independently namespaced.
+`AgentPlatformService.execute_flow` runs the bounded flow. When an `AgentFlowStore` is injected, it
+reserves the aggregate before invoking an agent and commits the resulting step history afterward.
+`start_flow` requires persistence and returns the durable snapshot. `resume_flow` claims the
+expected aggregate version before running the next typed request.
+
+Approval is data, not an implicit flag. A flow waiting for approval requires an
+`AgentFlowApproval` containing a decision and stable external reference. Approved flows require a
+typed continuation request. `changes_requested` and `cancelled` decisions close the current flow
+without invoking another agent. Agents never consume approvals by calling one another directly.
 
 ## State And Checkpointing
 
 State is separated into three layers:
 
 - Agent workflow state: agent-specific Pydantic state models.
-- Cross-agent metadata: `AgentExecutionContext`, lifecycle events, and persisted results.
+- Cross-agent metadata: `AgentExecutionContext`, lifecycle events, persisted results, and the
+  durable flow aggregate.
 - Long-term project memory: existing domain stores, artifacts, OpenProject, Neo4j, and Weaviate.
 
 Checkpoint identity includes:
@@ -244,6 +264,17 @@ Checkpoint identity includes:
 The current implementation includes `InMemoryCheckpointStore` for tests and local contract validation. `SqlAlchemyAgentCheckpointStore` persists platform checkpoints in `agent_platform_checkpoints`.
 
 Agent results can be stored through `SqlAlchemyAgentResultStore`, which writes typed result payloads to `agent_platform_results`. The orchestrator uses `dependencies.result_store` when no explicit result store is supplied.
+
+`SqlAlchemyAgentFlowStore` writes the aggregate to `agent_platform_flows`. Each mutation locks the
+row, checks the caller's expected version, and increments the version. The JSONB payload preserves
+the complete step and approval history, while relational columns index status, current execution,
+pending action, pending agent, approval state, correlation, and resume count. A unique
+`(project_key, workflow_id)` constraint prevents duplicate flow creation.
+
+Flow and agent checkpoints remain separate. A flow record coordinates high-level transitions; it
+does not replace agent-specific checkpoint namespaces or long-term project memory. If agent
+execution raises after reservation, the running aggregate retains the pending typed request for
+diagnosis and recovery instead of losing execution identity.
 
 PostgreSQL-backed LangGraph checkpointing remains available in the existing workflow package for internal LangGraph workflows and can be used inside each agent where needed.
 
@@ -318,8 +349,12 @@ The new platform test suite covers:
 - Orchestration transitions for planning approval, coding to verification, verification rework, verification blocked, planning clarification, and coding blocked.
 - Multi-step flow completion, approval and clarification pauses, pending transition input,
   retry limits, and cross-workflow handoff rejection.
+- Durable reserve/complete transitions, append-only step numbering, audited approval resume and
+  rejection, optimistic version conflicts, and pending-request preservation on execution failure.
 - Production transition resolution from persisted tasks, approvals, context capsules, coding
   checkpoints, and coding results.
+- Live PostgreSQL flow persistence, JSONB reloading, indexed aggregate fields, and migration-head
+  validation.
 - Checkpoint namespace isolation and failure checkpoint preservation.
 
 The tests use fake dependencies and do not require Docker, OpenProject, Neo4j, Weaviate, or a live LLM.

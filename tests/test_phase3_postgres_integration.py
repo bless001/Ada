@@ -78,7 +78,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
     with psycopg.connect(_to_psycopg_url(migrated_postgres_url)) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
-            assert cur.fetchone()[0] == "0011_agent_platform_persistence"
+            assert cur.fetchone()[0] == "0012_agent_platform_flows"
 
             cur.execute(
                 """
@@ -89,6 +89,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                       'pm_webhook_events',
                       'agent_jobs',
                       'agent_platform_checkpoints',
+                      'agent_platform_flows',
                       'agent_platform_results',
                       'agent_executions',
                       'approval_records',
@@ -107,6 +108,7 @@ def test_phase3_alembic_upgrade_creates_expected_tables(migrated_postgres_url: s
                 "agent_executions",
                 "agent_jobs",
                 "agent_platform_checkpoints",
+                "agent_platform_flows",
                 "agent_platform_results",
                 "approval_records",
                 "coding_attempts",

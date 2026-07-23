@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -12,12 +13,15 @@ from planning_agent_core.agent_platform.orchestration.routing import AgentRouteD
 
 
 class AgentFlowStatus(StrEnum):
+    RUNNING = "running"
     COMPLETED = "completed"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
     WAITING_FOR_CLARIFICATION = "waiting_for_clarification"
     TRANSITION_PENDING = "transition_pending"
     ESCALATED = "escalated"
     MAX_STEPS_EXCEEDED = "max_steps_exceeded"
+    CHANGES_REQUESTED = "changes_requested"
+    CANCELLED = "cancelled"
 
 
 class AgentFlowStep(BaseModel):
@@ -27,6 +31,8 @@ class AgentFlowStep(BaseModel):
 
 
 class AgentFlowResult(BaseModel):
+    flow_id: UUID | None = None
+    version: int = Field(default=0, ge=0)
     workflow_id: str
     status: AgentFlowStatus
     steps: list[AgentFlowStep]

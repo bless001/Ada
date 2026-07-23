@@ -628,6 +628,72 @@ class AgentPlatformResultRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class AgentPlatformFlowRecord(Base):
+    __tablename__ = "agent_platform_flows"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_key",
+            "workflow_id",
+            name="uq_agent_platform_flows_project_workflow",
+        ),
+        CheckConstraint(
+            "status IN ("
+            "'running', 'completed', 'waiting_for_approval', "
+            "'waiting_for_clarification', 'transition_pending', 'escalated', "
+            "'max_steps_exceeded', 'changes_requested', 'cancelled'"
+            ")",
+            name="ck_agent_platform_flows_status",
+        ),
+        Index(
+            "idx_agent_platform_flows_project_status",
+            "project_key",
+            "status",
+            "updated_at",
+        ),
+        Index(
+            "idx_agent_platform_flows_current_execution",
+            "current_execution_id",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    workflow_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    project_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    task_key: Mapped[str | None] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    current_agent_type: Mapped[str | None] = mapped_column(String(80))
+    current_execution_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True)
+    )
+    pending_action: Mapped[str | None] = mapped_column(String(80))
+    pending_agent_type: Mapped[str | None] = mapped_column(String(80))
+    requires_approval: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    correlation_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    resume_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_approval_decision: Mapped[str | None] = mapped_column(String(40))
+    flow_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now_utc,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now_utc,
+        onupdate=now_utc,
+    )
+
+
 class OpenProjectContextSnapshot(Base):
     __tablename__ = "pm_context_snapshots"
     __table_args__ = (

@@ -32,13 +32,34 @@ request from persisted artifacts and prior results. This keeps planning, coding,
 payload knowledge in the application composition layer.
 
 If a resolver is absent or cannot yet provide the request, the flow returns `transition_pending`
-with the pending route. Approval and clarification produce their own waiting statuses. The caller
-can resume by starting a new flow with the approved or clarified typed request and the same
-`workflow_id`.
+with the pending route. Approval and clarification produce their own waiting statuses. Durable
+callers continue the same aggregate through `AgentPlatformService.resume_flow` or
+`POST /v1/agents/flows/{flow_id}/resume`, passing the current version and a typed request that
+preserves project and workflow identity.
 
 Database-backed platform construction now supplies `ApplicationAgentTransitionResolver` by
 default. Its implementation and persisted context contract are recorded in
 `docs/agent-platform-transition-resolver-results.md`.
+
+## Durable Aggregate
+
+`AgentFlowOrchestrator` remains persistence-independent. `AgentPlatformService` wraps it with an
+injected `AgentFlowStore`:
+
+1. Reserve a running aggregate and pending request at version 1.
+2. Run one or more bounded agent steps.
+3. Append raw audit records and commit the resulting status at version 2.
+4. Claim a paused flow using its expected version, recording approval evidence when applicable.
+5. Execute the typed continuation and append its steps without overwriting prior history.
+
+`InMemoryAgentFlowStore` supports deterministic unit tests.
+`SqlAlchemyAgentFlowStore` uses row locking, optimistic versions, a unique project/workflow
+identity, indexed state columns, and a JSONB aggregate in `agent_platform_flows`.
+
+Approval rejection and cancellation close the aggregate without running another agent. Execution
+exceptions leave the pre-committed running record and pending request available for diagnosis.
+Detailed implementation and validation are recorded in
+`docs/agent-platform-flow-persistence-results.md`.
 
 ## Validation
 
@@ -46,12 +67,13 @@ Commands run:
 
 ```powershell
 .venv/Scripts/python.exe -m ruff check planning_agent_core/planning_agent_core/agent_platform/orchestration planning_agent_core/planning_agent_core/services/agent_platform_service.py tests/test_agent_platform_flow.py
-.venv/Scripts/python.exe -m pytest -q tests/test_agent_platform_flow.py tests/test_agent_platform.py tests/test_agent_platform_api.py tests/test_import_smoke.py
+.venv/Scripts/python.exe -m pytest -q tests/test_agent_flow_persistence.py tests/test_agent_platform_api.py tests/test_agent_platform_flow.py
 .venv/Scripts/python.exe -m pytest -q
 ```
 
 Results:
 
 - Ruff: passed.
-- Focused platform and flow tests: 28 passed.
-- Full test suite: 143 passed, 11 skipped, 4 existing warnings.
+- Focused persistence, API, and flow tests: 23 passed.
+- Full test suite with PostgreSQL integrations enabled: 173 passed, 2 skipped, 4 existing
+  warnings.
