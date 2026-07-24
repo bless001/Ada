@@ -312,7 +312,12 @@ Implementation status on 2026-07-24:
   rework request when a prepared rework attempt is available.
 - Complete: configuration-driven Verification override gates, typed override commands, immutable
   original results, and durable PostgreSQL-backed actor/reason/reference audit records.
-- Remaining: projection of verification status, evidence, and override history to OpenProject.
+- Complete: configuration-driven OpenProject projection maps Verification verdicts to semantic
+  work-package statuses, adds bounded evidence comments, and records human override history without
+  mutating the original Verification result.
+- Complete: projection uses durable work-package mappings, idempotent outbound operations,
+  reconciliation snapshots, retry-safe deterministic keys, and managed adapter lifecycles.
+- Phase 8 is complete. Live OpenProject end-to-end validation remains in Phase 9.
 
 ## Phase 9: E2E Hardening And Documentation
 

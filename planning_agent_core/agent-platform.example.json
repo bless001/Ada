@@ -47,6 +47,7 @@
         "require_test_command_for_pass": false,
         "require_test_evidence_for_source_changes": false,
         "security_review_enabled": true,
+        "openproject_projection_enabled": true,
         "human_override_enabled": false,
         "human_override_allowed_verdicts": ["changes_requested"],
         "warn_on_sensitive_changes": false,

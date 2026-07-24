@@ -61,15 +61,38 @@ class SqlAlchemyOpenProjectOutboundStore:
         existing = await self.db.scalar(
             select(OpenProjectOutboundOperation).where(
                 OpenProjectOutboundOperation.idempotency_key == idempotency_key
-            )
+            ).with_for_update()
         )
-        await self.db.rollback()
         if existing is None:
+            await self.db.rollback()
             raise RuntimeError(
                 "OpenProject outbound operation conflict did not find existing record"
             )
+        if existing.operation_type != operation_type.value:
+            await self.db.rollback()
+            raise RuntimeError(
+                "OpenProject idempotency key was reused for a different operation type"
+            )
+        if existing.status == OpenProjectOperationStatus.FAILED.value:
+            existing.status = OpenProjectOperationStatus.PENDING.value
+            existing.project_id = project_id
+            existing.artifact_id = artifact_id
+            existing.target_artifact_type = target_artifact_type
+            existing.target_external_id = target_external_id
+            existing.request_payload = request_payload
+            existing.response_payload = None
+            existing.error_message = None
+            existing.completed_at = None
+            await self.db.commit()
+            return OpenProjectOperationClaim(
+                idempotency_key=idempotency_key,
+                operation_type=operation_type,
+                status=OpenProjectOperationStatus.PENDING,
+                should_execute=True,
+                reclaimed=True,
+            )
 
-        return OpenProjectOperationClaim(
+        claim = OpenProjectOperationClaim(
             idempotency_key=idempotency_key,
             operation_type=OpenProjectOperationType(existing.operation_type),
             status=OpenProjectOperationStatus(existing.status),
@@ -77,6 +100,8 @@ class SqlAlchemyOpenProjectOutboundStore:
             response_payload=existing.response_payload,
             error_message=existing.error_message,
         )
+        await self.db.rollback()
+        return claim
 
     async def mark_succeeded(
         self,

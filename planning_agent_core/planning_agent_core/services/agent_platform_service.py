@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import ValidationError
 
@@ -39,6 +39,9 @@ from planning_agent_core.agent_platform.orchestration import (
 from planning_agent_core.agent_platform.orchestration.flow import AgentFlowStatus
 from planning_agent_core.agent_platform.runtime import AgentDependencyContainer
 from planning_agent_core.domain.enums import ApprovalDecision
+from planning_agent_core.services.verification_projection_service import (
+    VerificationOpenProjectProjectionService,
+)
 
 
 class AgentPlatformService:
@@ -52,6 +55,8 @@ class AgentPlatformService:
         orchestrator: AgentOrchestrator | None = None,
         transition_resolver: AgentTransitionRequestResolver | None = None,
         flow_store: AgentFlowStore | None = None,
+        verification_projection_service: VerificationOpenProjectProjectionService
+        | None = None,
         flow_lease_seconds: int = 300,
         flow_recovery_enabled: bool = True,
     ) -> None:
@@ -63,11 +68,19 @@ class AgentPlatformService:
         )
         self.transition_resolver = transition_resolver
         self.flow_store = flow_store
+        self.verification_projection_service = (
+            verification_projection_service
+            or VerificationOpenProjectProjectionService(
+                dependencies.work_package_gateway
+            )
+        )
         self.flow_lease_seconds = flow_lease_seconds
         self.flow_recovery_enabled = flow_recovery_enabled
 
     async def execute(self, request: AgentExecutionRequest) -> AgentOrchestrationResult:
-        return await self.orchestrator.run_once(request)
+        outcome = await self.orchestrator.run_once(request)
+        await self.verification_projection_service.project_execution(request, outcome)
+        return outcome
 
     async def enqueue_flow(
         self,
@@ -103,6 +116,7 @@ class AgentPlatformService:
             ),
         )
         result = await flow_orchestrator.run(request, max_steps=max_steps)
+        await self.verification_projection_service.project_flow(result)
         if reservation is None:
             return result
         persisted = await self.flow_store.complete_run(
@@ -199,6 +213,11 @@ class AgentPlatformService:
             raise AgentValidationError(str(exc)) from exc
 
         override = AgentFlowOverrideRecord(
+            override_id=_verification_override_id(
+                flow_id=flow_id,
+                source_result_id=source.result_id,
+                override_reference=command.override_reference,
+            ),
             override_type=VerificationOverrideType.COMPLETION.value,
             source_step_sequence=source.sequence,
             source_agent_type=source.agent_type,
@@ -213,6 +232,12 @@ class AgentPlatformService:
             reason=command.reason,
             override_reference=command.override_reference,
             metadata=command.metadata,
+        )
+        await self.verification_projection_service.project_override(
+            flow=current,
+            source=source,
+            result=result,
+            override=override,
         )
         return await self.flow_store.complete_override(
             flow_id=flow_id,
@@ -275,6 +300,7 @@ class AgentPlatformService:
             ),
         )
         result = await flow_orchestrator.run(request, max_steps=max_steps)
+        await self.verification_projection_service.project_flow(result)
         return await self.flow_store.complete_run(
             flow_id=flow_id,
             result=result,
@@ -328,6 +354,7 @@ class AgentPlatformService:
             ),
         )
         result = await flow_orchestrator.run(request, max_steps=max_steps)
+        await self.verification_projection_service.project_flow(result)
         return await self.flow_store.complete_run(
             flow_id=flow_id,
             result=result,
@@ -354,6 +381,7 @@ class AgentPlatformService:
             ),
         )
         result = await flow_orchestrator.run(request, max_steps=max_steps)
+        await self.verification_projection_service.project_flow(result)
         return await self.flow_store.complete_run(
             flow_id=claim.flow_id,
             result=result,
@@ -371,6 +399,8 @@ def create_agent_platform_service(
     *,
     transition_resolver: AgentTransitionRequestResolver | None = None,
     flow_store: AgentFlowStore | None = None,
+    verification_projection_service: VerificationOpenProjectProjectionService
+    | None = None,
     flow_lease_seconds: int = 300,
     flow_recovery_enabled: bool = True,
 ) -> AgentPlatformService:
@@ -378,6 +408,7 @@ def create_agent_platform_service(
         dependencies=dependencies or AgentDependencyContainer(),
         transition_resolver=transition_resolver,
         flow_store=flow_store,
+        verification_projection_service=verification_projection_service,
         flow_lease_seconds=flow_lease_seconds,
         flow_recovery_enabled=flow_recovery_enabled,
     )
@@ -444,3 +475,18 @@ def _active_lease_id(flow: PersistedAgentFlow) -> UUID:
     if flow.lease is None:
         raise RuntimeError("Running agent flow does not have an active lease")
     return flow.lease.lease_id
+
+
+def _verification_override_id(
+    *,
+    flow_id: UUID,
+    source_result_id: UUID,
+    override_reference: str,
+) -> UUID:
+    return uuid5(
+        NAMESPACE_URL,
+        (
+            "ada:verification-override:"
+            f"{flow_id}:{source_result_id}:{override_reference}"
+        ),
+    )

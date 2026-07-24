@@ -184,6 +184,7 @@ class SqlAlchemyAgentTransitionContextStore:
                 "plan_version_number": version.version_number,
                 "plan_version_status": version.status,
                 "plan_node_id": str(node.id),
+                "plan_node_identity_id": str(identity.id),
                 "approval_decision": approval_decision,
                 "context_capsule_ids": [str(item.id) for item in capsules],
             },
@@ -275,6 +276,12 @@ def _artifact_references(
             metadata={
                 "system_name": artifact.system_name,
                 "external_id": artifact.external_id,
+                "project_record_id": str(artifact.project_id),
+                "node_identity_id": (
+                    str(artifact.node_identity_id)
+                    if artifact.node_identity_id is not None
+                    else None
+                ),
             },
         )
         for artifact in external_artifacts

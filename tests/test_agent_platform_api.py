@@ -13,6 +13,9 @@ from planning_agent_core.agent_platform.agents.base import (
 )
 from planning_agent_core.agent_platform.agents.coding import CodingAgentRequest
 from planning_agent_core.agent_platform.agents.planning import PlanningAgentRequest
+from planning_agent_core.agent_platform.adapters.openproject import (
+    ManagedWorkPackageGateway,
+)
 from planning_agent_core.agent_platform.config import AgentConfig
 from planning_agent_core.agent_platform.orchestration import (
     AgentFlowApproval,
@@ -175,6 +178,10 @@ def test_database_platform_service_includes_production_transition_resolver():
     assert service.transition_resolver.context_store.db is db
     assert isinstance(service.flow_store, SqlAlchemyAgentFlowStore)
     assert service.flow_store.db is db
+    assert isinstance(
+        service.dependencies.work_package_gateway,
+        ManagedWorkPackageGateway,
+    )
 
 
 @pytest.mark.asyncio

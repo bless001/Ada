@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from planning_agent_core.application.openproject_mapping import (
+        OpenProjectResourceCatalog,
+    )
 
 
 class OpenProjectOperationType(StrEnum):
@@ -25,6 +30,7 @@ class OpenProjectOperationClaim:
     should_execute: bool
     response_payload: dict[str, Any] | None = None
     error_message: str | None = None
+    reclaimed: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +108,9 @@ class OpenProjectReconciliationStorePort(Protocol):
 
 
 class OpenProjectPort(Protocol):
+    async def load_resource_catalog(self) -> "OpenProjectResourceCatalog":
+        ...
+
     async def get_work_package(self, work_package_id: str) -> dict[str, Any]:
         ...
 

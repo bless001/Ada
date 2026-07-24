@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from planning_agent_core.adapters.openproject import OpenProjectClient
+from planning_agent_core.agent_platform.adapters.openproject import (
+    ManagedWorkPackageGateway,
+)
 from planning_agent_core.agent_platform.config import load_agent_platform_config
 from planning_agent_core.agent_platform.runtime import AgentDependencyContainer
 from planning_agent_core.persistence.agent_platform import (
@@ -11,6 +15,15 @@ from planning_agent_core.persistence.agent_platform import (
 from planning_agent_core.persistence.agent_flows import SqlAlchemyAgentFlowStore
 from planning_agent_core.persistence.agent_transition_context import (
     SqlAlchemyAgentTransitionContextStore,
+)
+from planning_agent_core.persistence.openproject_artifacts import (
+    SqlAlchemyOpenProjectArtifactStore,
+)
+from planning_agent_core.persistence.openproject_outbox import (
+    SqlAlchemyOpenProjectOutboundStore,
+)
+from planning_agent_core.persistence.openproject_reconciliation import (
+    SqlAlchemyOpenProjectReconciliationStore,
 )
 from planning_agent_core.services.agent_platform_service import (
     AgentPlatformService,
@@ -32,11 +45,22 @@ def create_agent_platform_service_for_db(
     platform_config = load_agent_platform_config()
     checkpoint_store = SqlAlchemyAgentCheckpointStore(db)
     result_store = SqlAlchemyAgentResultStore(db)
+    artifact_store = SqlAlchemyOpenProjectArtifactStore(db)
+    outbound_store = SqlAlchemyOpenProjectOutboundStore(db)
+    reconciliation_store = SqlAlchemyOpenProjectReconciliationStore(db)
+    work_package_gateway = ManagedWorkPackageGateway(
+        lambda: OpenProjectClient(
+            artifact_store=artifact_store,
+            outbound_store=outbound_store,
+            reconciliation_store=reconciliation_store,
+        )
+    )
     dependencies = AgentDependencyContainer(
         db=db,
         planning_service=PlanningService(db),
         coding_service=CodingService(db),
         repository_service=RepositoryAnalysisService(db),
+        work_package_gateway=work_package_gateway,
         checkpoint_store=checkpoint_store,
         result_store=result_store,
     )

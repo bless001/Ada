@@ -1,3 +1,6 @@
-from planning_agent_core.agent_platform.adapters.openproject.work_packages import WorkPackageGateway
+from planning_agent_core.agent_platform.adapters.openproject.work_packages import (
+    ManagedWorkPackageGateway,
+    WorkPackageGateway,
+)
 
-__all__ = ["WorkPackageGateway"]
+__all__ = ["ManagedWorkPackageGateway", "WorkPackageGateway"]

@@ -43,7 +43,10 @@ Baseline date: 2026-07-21
 
 - Mutating OpenProject adapter methods require an `OpenProjectOutboundStorePort`; without it they raise instead of performing unsafe direct writes.
 - Repeated outbound idempotency keys return the prior successful response and do not issue another OpenProject HTTP request.
-- Failed or pending outbound operation records are not automatically retried in this slice; retry policy for external mutations should be explicit because network failures can happen after OpenProject accepted a write.
+- Failed outbound operation records can be reclaimed under a PostgreSQL row lock. Reclaimed
+  comments inspect OpenProject activities for the existing idempotency marker before posting, so
+  a lost HTTP response does not duplicate a comment. Pending operations are not concurrently
+  reclaimed.
 - The trigger-side legacy OpenProject client remains as reference code, but the active event worker delegates orchestration to planning core.
 - Feedback classification is deterministic and marker-based.
 - Semantic mapping is name-based and fails clearly when provisioning has not supplied a required OpenProject type, status, or priority link.

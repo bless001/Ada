@@ -145,6 +145,7 @@ async def test_openproject_outbound_store_claims_new_operation_with_conflict_sql
     assert "ON CONFLICT (idempotency_key) DO NOTHING" in compiled
     assert claim.should_execute is True
     assert claim.status == OpenProjectOperationStatus.PENDING
+    assert claim.reclaimed is False
     assert session.commits == 1
 
 
@@ -200,6 +201,44 @@ async def test_openproject_outbound_store_returns_existing_operation_without_exe
     assert claim.status == OpenProjectOperationStatus.SUCCEEDED
     assert claim.response_payload == {"id": "activity-1"}
     assert session.rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_openproject_outbound_store_reclaims_failed_operation_for_retry():
+    existing = SimpleNamespace(
+        operation_type=OpenProjectOperationType.ADD_COMMENT.value,
+        status=OpenProjectOperationStatus.FAILED.value,
+        project_id=None,
+        artifact_id=None,
+        target_artifact_type="work_package",
+        target_external_id="34",
+        request_payload={"markdown": "old"},
+        response_payload=None,
+        error_message="temporary failure",
+        completed_at=object(),
+    )
+    local_project_id = uuid4()
+    session = FakeSession([None, existing])
+    store = SqlAlchemyOpenProjectOutboundStore(session)
+
+    claim = await store.claim_operation(
+        idempotency_key="op:comment:retry",
+        operation_type=OpenProjectOperationType.ADD_COMMENT,
+        request_payload={"markdown": "new"},
+        project_id=local_project_id,
+        target_artifact_type="work_package",
+        target_external_id="34",
+    )
+
+    assert claim.should_execute is True
+    assert claim.status == OpenProjectOperationStatus.PENDING
+    assert claim.reclaimed is True
+    assert existing.status == OpenProjectOperationStatus.PENDING.value
+    assert existing.project_id == local_project_id
+    assert existing.request_payload == {"markdown": "new"}
+    assert existing.error_message is None
+    assert existing.completed_at is None
+    assert session.commits == 1
 
 
 @pytest.mark.asyncio
@@ -546,6 +585,54 @@ async def test_openproject_adapter_skips_duplicate_completed_comment():
     assert result == {"id": "activity-1"}
     assert http_client.requests == []
     assert store.succeeded_calls == []
+
+
+@pytest.mark.asyncio
+async def test_openproject_adapter_reconciles_reclaimed_comment_before_retrying():
+    idempotency_key = "op:comment:retry"
+    store = FakeOutboundStore(
+        OpenProjectOperationClaim(
+            idempotency_key=idempotency_key,
+            operation_type=OpenProjectOperationType.ADD_COMMENT,
+            status=OpenProjectOperationStatus.PENDING,
+            should_execute=True,
+            reclaimed=True,
+        )
+    )
+    existing_activity = {
+        "id": "activity-1",
+        "comment": {
+            "raw": markdown_with_idempotency_marker(
+                "Agent update",
+                idempotency_key,
+            )
+        },
+    }
+    http_client = FakeHttpClient(
+        [
+            FakeResponse({"id": 34}),
+            FakeResponse({"_embedded": {"elements": [existing_activity]}}),
+        ]
+    )
+    client = OpenProjectClient(outbound_store=store, http_client=http_client)
+
+    result = await client.add_comment(
+        work_package_id="34",
+        external_idempotency_key=idempotency_key,
+        markdown="Agent update",
+    )
+
+    assert result == existing_activity
+    assert [request["path"] for request in http_client.requests] == [
+        "/work_packages/34",
+        "/work_packages/34/activities",
+    ]
+    assert store.succeeded_calls == [
+        {
+            "idempotency_key": idempotency_key,
+            "response_payload": existing_activity,
+        }
+    ]
 
 
 @pytest.mark.asyncio

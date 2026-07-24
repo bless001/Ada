@@ -87,6 +87,7 @@ DEFAULT_AGENT_PLATFORM_CONFIG = AgentPlatformConfig(
                 "require_test_command_for_pass": False,
                 "require_test_evidence_for_source_changes": False,
                 "security_review_enabled": True,
+                "openproject_projection_enabled": True,
                 "human_override_enabled": False,
             },
         ),

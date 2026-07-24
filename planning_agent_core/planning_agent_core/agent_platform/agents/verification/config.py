@@ -33,6 +33,7 @@ class VerificationAgentConfig(AgentConfig):
     warn_on_sensitive_changes: bool = False
     warn_on_missing_rollback: bool = False
     security_review_enabled: bool = True
+    openproject_projection_enabled: bool = True
     human_override_enabled: bool = False
     human_override_allowed_verdicts: list[VerificationVerdict] = Field(
         default_factory=lambda: [VerificationVerdict.CHANGES_REQUESTED]

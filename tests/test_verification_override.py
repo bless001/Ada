@@ -93,6 +93,19 @@ def _command() -> VerificationOverrideCommand:
     )
 
 
+class FailingOnceOverrideProjector:
+    def __init__(self) -> None:
+        self.override_ids = []
+
+    async def project_flow(self, result):
+        return []
+
+    async def project_override(self, **kwargs):
+        self.override_ids.append(kwargs["override"].override_id)
+        if len(self.override_ids) == 1:
+            raise RuntimeError("temporary OpenProject failure")
+
+
 def test_override_contract_and_configuration_reject_unsafe_values():
     with pytest.raises(ValidationError):
         VerificationOverrideCommand(
@@ -215,3 +228,35 @@ async def test_disabled_override_policy_keeps_normal_rework_route():
             ),
             result=result.final_outcome.result,
         )
+
+
+@pytest.mark.asyncio
+async def test_verification_override_keeps_projection_identity_across_retry():
+    store = InMemoryAgentFlowStore()
+    projector = FailingOnceOverrideProjector()
+    service = create_agent_platform_service(
+        AgentDependencyContainer(),
+        flow_store=store,
+        verification_projection_service=projector,
+    )
+    waiting = await service.start_flow(_execution(human_override_enabled=True))
+
+    with pytest.raises(RuntimeError, match="temporary OpenProject failure"):
+        await service.override_verification_flow(
+            flow_id=waiting.flow_id,
+            expected_version=waiting.version,
+            command=_command(),
+        )
+
+    unchanged = await service.get_flow(waiting.flow_id)
+    assert unchanged.status == AgentFlowStatus.WAITING_FOR_APPROVAL
+    assert unchanged.version == waiting.version
+    completed = await service.override_verification_flow(
+        flow_id=waiting.flow_id,
+        expected_version=waiting.version,
+        command=_command(),
+    )
+
+    assert completed.status == AgentFlowStatus.COMPLETED
+    assert projector.override_ids[0] == projector.override_ids[1]
+    assert completed.overrides[0].override_id == projector.override_ids[0]

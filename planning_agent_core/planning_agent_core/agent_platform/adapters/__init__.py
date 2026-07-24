@@ -10,7 +10,10 @@ from planning_agent_core.agent_platform.adapters.git import (
 )
 from planning_agent_core.agent_platform.adapters.llm import LLMClient
 from planning_agent_core.agent_platform.adapters.neo4j import GraphRepository
-from planning_agent_core.agent_platform.adapters.openproject import WorkPackageGateway
+from planning_agent_core.agent_platform.adapters.openproject import (
+    ManagedWorkPackageGateway,
+    WorkPackageGateway,
+)
 from planning_agent_core.agent_platform.adapters.postgres import (
     ApprovalRepository,
     ArtifactRepository,
@@ -32,6 +35,7 @@ __all__ = [
     "GraphRepository",
     "LLMClient",
     "LspLookupGateway",
+    "ManagedWorkPackageGateway",
     "PostgresRepositoryIndexRepository",
     "ProjectRepository",
     "RepositoryAnalysisGateway",

@@ -274,6 +274,21 @@ class OpenProjectClient:
                 payload=work_package,
                 fallback_external_id=work_package_id,
             )
+            before_activities_payload = None
+            if claim.reclaimed:
+                before_activities_payload = await self.list_work_package_activities(
+                    work_package_id
+                )
+                existing_activity = _find_idempotent_activity(
+                    before_activities_payload,
+                    external_idempotency_key,
+                )
+                if existing_activity is not None:
+                    await store.mark_succeeded(
+                        idempotency_key=external_idempotency_key,
+                        response_payload=existing_activity,
+                    )
+                    return existing_activity
             await self._record_reconciliation_snapshot(
                 outbound_idempotency_key=external_idempotency_key,
                 operation_type=OpenProjectOperationType.ADD_COMMENT,
@@ -285,6 +300,7 @@ class OpenProjectClient:
                         "raw": marked_markdown,
                     }
                 },
+                before_activities_payload=before_activities_payload,
                 project_id=local_project_id,
                 artifact_id=(
                     artifact_mapping.artifact_id if artifact_mapping else None
@@ -442,6 +458,28 @@ def _last_path_segment(href: str) -> str | None:
     path = urlparse(href).path
     segment = path.rstrip("/").rsplit("/", 1)[-1]
     return segment or None
+
+
+def _find_idempotent_activity(
+    activities_payload: dict[str, Any],
+    idempotency_key: str,
+) -> dict[str, Any] | None:
+    activities = activities_payload.get("_embedded", {}).get("elements", [])
+    for activity in activities:
+        comment = activity.get("comment")
+        comment_payload = comment if isinstance(comment, dict) else {}
+        texts = (
+            comment_payload.get("raw"),
+            comment_payload.get("html"),
+            activity.get("raw"),
+        )
+        if any(
+            isinstance(text, str)
+            and has_openproject_idempotency_marker(text, idempotency_key)
+            for text in texts
+        ):
+            return activity
+    return None
 
 
 def _hal_elements_by_name(data: dict[str, Any]) -> dict[str, str]:

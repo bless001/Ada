@@ -133,8 +133,9 @@ Results:
 - Full suite with live PostgreSQL integration gates enabled: 205 passed, 1 skipped, and 4
   pre-existing warnings.
 
-## Remaining Phase 8 Work
+## Follow-On Completion
 
 - Verification-specific override and audit are complete; see
   `docs/phase-8-verification-override-results.md`.
-- Project verification status, evidence summary, and override history to OpenProject.
+- Verification status, evidence summary, and override history projection to OpenProject is
+  complete; see `docs/phase-8-openproject-verification-results.md`.

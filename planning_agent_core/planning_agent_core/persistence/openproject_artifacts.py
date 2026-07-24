@@ -25,6 +25,14 @@ class SqlAlchemyOpenProjectArtifactStore:
         node_identity_id: UUID | None = None,
     ) -> OpenProjectArtifactMapping:
         payload = external_payload or {}
+        update_values = {
+            "project_id": project_id,
+            "external_url": external_url,
+            "external_payload": payload,
+            "updated_at": now_utc(),
+        }
+        if node_identity_id is not None:
+            update_values["node_identity_id"] = node_identity_id
         stmt = (
             insert(ExternalArtifact)
             .values(
@@ -42,13 +50,7 @@ class SqlAlchemyOpenProjectArtifactStore:
                     ExternalArtifact.artifact_type,
                     ExternalArtifact.external_id,
                 ],
-                set_={
-                    "project_id": project_id,
-                    "node_identity_id": node_identity_id,
-                    "external_url": external_url,
-                    "external_payload": payload,
-                    "updated_at": now_utc(),
-                },
+                set_=update_values,
             )
             .returning(ExternalArtifact.id)
         )
