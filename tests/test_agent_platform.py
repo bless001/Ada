@@ -297,6 +297,10 @@ async def test_registered_agents_accept_valid_requests_and_produce_valid_results
     assert AgentResult.model_validate(verification_result.model_dump(mode="json"))
     assert verification_result.verdict == VerificationVerdict.PASSED
     assert verification_result.next_action == AgentNextAction.COMPLETE
+    assert verification_result.acceptance_coverage.total_count == 1
+    assert verification_result.acceptance_coverage.mandatory_criteria_satisfied is True
+    assert verification_result.security_review.passed is True
+    assert verification_result.evidence_summary.diff_present is True
 
 
 @pytest.mark.asyncio

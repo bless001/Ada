@@ -303,6 +303,16 @@ Acceptance criteria:
 - Changes-required starts a linked new attempt.
 - Human override is audited.
 
+Implementation status on 2026-07-24:
+
+- Complete: independent verification graph, actual diff and command review, typed mandatory
+  acceptance matrix, modular test adequacy and regression assessment, security/configuration
+  review, final evidence summary, persisted per-node state, and verdict routing.
+- Complete: the application transition resolver converts `changes_requested` into a linked coding
+  rework request when a prepared rework attempt is available.
+- Remaining: verification-specific configurable human override with an explicit audit record.
+- Remaining: projection of verification status, evidence, and override history to OpenProject.
+
 ## Phase 9: E2E Hardening And Documentation
 
 Objective: make the system operable from a clean clone and prove the sample flow.

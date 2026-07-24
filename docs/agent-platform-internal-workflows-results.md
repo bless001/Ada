@@ -35,6 +35,7 @@ load_evidence
   -> inspect_quality_commands
   -> evaluate_acceptance_criteria
   -> review_risk
+  -> review_security_configuration
   -> return_verdict
 ```
 
@@ -78,7 +79,8 @@ that provides additional value.
 - `Agent.execute()` now validates the specialized request and delegates to its internal workflow.
 - Planning still uses requirement extraction, optional legacy plan drafting, and plan validation.
 - Coding still delegates the bounded write/test operation to `CodingService`.
-- Verification verdict and route semantics remain unchanged.
+- Verification composes typed acceptance, test adequacy, regression, security, and evidence-summary
+  skills while preserving verdict and route semantics.
 - Existing synchronous and background durable-flow entry points require no changes.
 
 ## Validation
@@ -88,7 +90,8 @@ Coverage includes:
 - Distinct graph names, graph objects, and node sets for all three agents.
 - Planning clarification conditional routing.
 - Coding execution and evidence handoff.
-- Verification evidence, acceptance-criteria, risk, and verdict phases.
+- Verification evidence, acceptance-criteria, test-adequacy, regression, security, summary, and
+  verdict phases.
 - Independent checkpoint namespaces and persisted node traces.
 - Preservation of the last completed workflow state after an exception.
 - Existing agent contract, orchestration, durable-flow, and worker behavior.

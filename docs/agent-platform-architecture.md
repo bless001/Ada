@@ -151,8 +151,17 @@ Verification Agent:
 
 - Loads the original acceptance criteria and coding result or diff.
 - Evaluates the actual diff, command evidence, and coding status independently from the coding summary.
+- Composes dependency-free typed skills for mandatory acceptance coverage, test adequacy,
+  regression risk, security/configuration review, and final evidence summarization.
+- Persists each typed assessment in its independent checkpoint state and includes the assessments
+  in `VerificationAgentResult`.
 - Produces one of `passed`, `passed_with_warnings`, `changes_requested`, or `blocked`.
 - Returns completion, coding rework, or escalation transitions.
+
+Verification skills do not import the agent or workflow. Graph nodes translate request data into
+skill input contracts and append returned findings. Failed commands, unsatisfied acceptance
+criteria, and error-level security findings prevent completion. Requirements for an executed test
+command and source-change test evidence are configurable to support gradual migration.
 
 ## Factory And Registration
 

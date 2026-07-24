@@ -81,7 +81,13 @@ DEFAULT_AGENT_PLATFORM_CONFIG = AgentPlatformConfig(
             implementation="default",
             checkpoint_namespace="verification",
             approval_required=False,
-            settings={"independent_workspace": True},
+            settings={
+                "independent_workspace": True,
+                "require_diff_for_pass": True,
+                "require_test_command_for_pass": False,
+                "require_test_evidence_for_source_changes": False,
+                "security_review_enabled": True,
+            },
         ),
     }
 )

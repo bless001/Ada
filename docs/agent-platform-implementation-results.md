@@ -35,6 +35,9 @@ Added a modular `agent_platform` package that generalizes the existing planning-
   `POST /v1/agents/flows/async` and `agent-flow-worker`.
 - Database-backed platform services now inject `ApplicationAgentTransitionResolver`, which builds
   typed coding and verification handoffs from persisted task context.
+- Verification evaluation is split into typed acceptance, test-adequacy, regression-risk,
+  security/configuration, and evidence-summary skills. Their assessments are persisted in
+  Verification Agent checkpoints and returned through its specialized result.
 - JSON configuration models, default config, loader, and example config.
 - Lazy `planning_agent_core.skills` package initialization so platform imports do not require LLM environment settings.
 - Contract, factory, orchestration, and checkpoint tests using fake dependencies.
@@ -61,11 +64,11 @@ Commands run:
 Results:
 
 - Ruff: passed.
-- Focused platform and flow tests: 47 passed.
-- Full test suite with PostgreSQL integrations enabled: 197 passed, 2 skipped, 4 existing
+- Focused platform and flow tests: passed.
+- Full test suite with PostgreSQL integrations enabled: 205 passed, 1 skipped, 4 existing
   warnings.
 
 ## Remaining Follow-Up
 
-- Add richer verification skills for acceptance matrix, regression risk, security/config review, and test adequacy.
+- Add verification-specific audited human override and OpenProject evidence projection.
 - Add integration tests against live OpenProject/Neo4j/Weaviate for platform-driven projections.

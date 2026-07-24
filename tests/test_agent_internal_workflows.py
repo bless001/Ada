@@ -219,6 +219,7 @@ async def test_agent_graphs_persist_independent_phase_checkpoints():
         "inspect_quality_commands",
         "evaluate_acceptance_criteria",
         "review_risk",
+        "review_security_configuration",
         "return_verdict",
     ]
     assert verification_result.verdict == VerificationVerdict.PASSED

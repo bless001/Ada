@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import re
+from dataclasses import dataclass, field
+from functools import partial
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
@@ -19,6 +20,19 @@ from planning_agent_core.agent_platform.agents.base.workflow import (
 )
 from planning_agent_core.agent_platform.agents.verification.config import (
     VerificationAgentConfig,
+)
+from planning_agent_core.agent_platform.agents.verification.skills import (
+    AcceptanceEvaluationInput,
+    AcceptanceEvaluationSkill,
+    AcceptanceEvidence,
+    EvidenceSummaryInput,
+    EvidenceSummarySkill,
+    RegressionRiskInput,
+    RegressionRiskSkill,
+    SecurityConfigurationInput,
+    SecurityConfigurationReviewSkill,
+    TestAdequacyInput,
+    TestAdequacySkill,
 )
 from planning_agent_core.agent_platform.agents.verification.state import (
     VerificationAgentRequest,
@@ -43,6 +57,8 @@ VERIFICATION_WORKFLOW_STEPS: tuple[str, ...] = (
     "run_relevant_tests",
     "evaluate_acceptance_criteria",
     "review_regression_risk",
+    "review_security_configuration",
+    "summarize_evidence",
     "return_verdict",
 )
 
@@ -51,6 +67,19 @@ class VerificationWorkflowState(BaseModel):
     request: VerificationAgentRequest
     agent_state: VerificationAgentState = Field(default_factory=VerificationAgentState)
     result: VerificationAgentResult | None = None
+
+
+@dataclass(frozen=True)
+class VerificationSkillSet:
+    acceptance_evaluation: AcceptanceEvaluationSkill = field(
+        default_factory=AcceptanceEvaluationSkill
+    )
+    test_adequacy: TestAdequacySkill = field(default_factory=TestAdequacySkill)
+    regression_risk: RegressionRiskSkill = field(default_factory=RegressionRiskSkill)
+    security_configuration: SecurityConfigurationReviewSkill = field(
+        default_factory=SecurityConfigurationReviewSkill
+    )
+    evidence_summary: EvidenceSummarySkill = field(default_factory=EvidenceSummarySkill)
 
 
 class VerificationAgentWorkflow:
@@ -63,7 +92,8 @@ class VerificationAgentWorkflow:
         self.config = config
         self.dependencies = dependencies
         self.steps = VERIFICATION_WORKFLOW_STEPS
-        self.graph = _compile_verification_graph()
+        self.skills = VerificationSkillSet()
+        self.graph = _compile_verification_graph(self.skills)
 
     async def run(
         self,
@@ -91,24 +121,35 @@ def build_verification_agent_workflow(
     return VerificationAgentWorkflow(config=config, dependencies=dependencies)
 
 
-def _compile_verification_graph():
+def _compile_verification_graph(skills: VerificationSkillSet):
     graph = StateGraph(
         VerificationWorkflowState,
         context_schema=AgentWorkflowRuntime,
     )
     graph.add_node("load_evidence", _load_evidence)
     graph.add_node("inspect_result", _inspect_result)
-    graph.add_node("inspect_quality_commands", _inspect_quality_commands)
-    graph.add_node("evaluate_acceptance_criteria", _evaluate_acceptance_criteria)
-    graph.add_node("review_risk", _review_risk)
-    graph.add_node("return_verdict", _return_verdict)
+    graph.add_node(
+        "inspect_quality_commands",
+        partial(_inspect_quality_commands, skills=skills),
+    )
+    graph.add_node(
+        "evaluate_acceptance_criteria",
+        partial(_evaluate_acceptance_criteria, skills=skills),
+    )
+    graph.add_node("review_risk", partial(_review_risk, skills=skills))
+    graph.add_node(
+        "review_security_configuration",
+        partial(_review_security_configuration, skills=skills),
+    )
+    graph.add_node("return_verdict", partial(_return_verdict, skills=skills))
 
     graph.add_edge(START, "load_evidence")
     graph.add_edge("load_evidence", "inspect_result")
     graph.add_edge("inspect_result", "inspect_quality_commands")
     graph.add_edge("inspect_quality_commands", "evaluate_acceptance_criteria")
     graph.add_edge("evaluate_acceptance_criteria", "review_risk")
-    graph.add_edge("review_risk", "return_verdict")
+    graph.add_edge("review_risk", "review_security_configuration")
+    graph.add_edge("review_security_configuration", "return_verdict")
     graph.add_edge("return_verdict", END)
     return graph.compile(name="verification-agent-workflow")
 
@@ -177,32 +218,25 @@ async def _inspect_result(
 async def _inspect_quality_commands(
     state: VerificationWorkflowState,
     runtime: Runtime[AgentWorkflowRuntime[VerificationAgentConfig]],
+    *,
+    skills: VerificationSkillSet,
 ) -> dict:
-    findings: list[VerificationFinding] = []
-    coding_result = state.request.coding_result
-    if coding_result is not None:
-        for record in coding_result.command_results:
-            if record.timed_out:
-                findings.append(
-                    VerificationFinding(
-                        severity="error",
-                        code="test_timeout",
-                        message=(f"Quality command timed out: {' '.join(record.command)}"),
-                    )
-                )
-            elif record.exit_code != 0:
-                findings.append(
-                    VerificationFinding(
-                        severity="error",
-                        code="test_failure",
-                        message=(f"Quality command failed: {' '.join(record.command)}"),
-                    )
-                )
+    output = await skills.test_adequacy.run(
+        TestAdequacyInput(
+            coding_result=state.request.coding_result,
+            test_evidence=state.request.test_evidence,
+            require_test_command_for_pass=(runtime.context.config.require_test_command_for_pass),
+            require_test_evidence_for_source_changes=(
+                runtime.context.config.require_test_evidence_for_source_changes
+            ),
+        )
+    )
     agent_state = _with_findings(
         state.agent_state,
         phase="inspect_quality_commands",
-        findings=findings,
+        findings=output.findings,
     )
+    agent_state.test_adequacy = output.assessment
     await persist_workflow_state(runtime.context, agent_state)
     return {"agent_state": agent_state}
 
@@ -210,25 +244,21 @@ async def _inspect_quality_commands(
 async def _evaluate_acceptance_criteria(
     state: VerificationWorkflowState,
     runtime: Runtime[AgentWorkflowRuntime[VerificationAgentConfig]],
+    *,
+    skills: VerificationSkillSet,
 ) -> dict:
-    evidence_text = _evidence_text(state.request)
-    findings = [
-        VerificationFinding(
-            severity="error",
-            code="acceptance_criterion_unmet",
-            message=(
-                f"Acceptance criterion is not supported by diff or evidence: {criterion.statement}"
-            ),
-            acceptance_criterion_key=criterion.key,
+    output = await skills.acceptance_evaluation.run(
+        AcceptanceEvaluationInput(
+            criteria=state.request.acceptance_criteria,
+            evidence=_acceptance_evidence(state.request),
         )
-        for criterion in state.request.acceptance_criteria
-        if not _criterion_supported(criterion.statement, evidence_text)
-    ]
+    )
     agent_state = _with_findings(
         state.agent_state,
         phase="evaluate_acceptance_criteria",
-        findings=findings,
+        findings=output.findings,
     )
+    agent_state.acceptance_coverage = output.assessment
     await persist_workflow_state(runtime.context, agent_state)
     return {"agent_state": agent_state}
 
@@ -236,25 +266,53 @@ async def _evaluate_acceptance_criteria(
 async def _review_risk(
     state: VerificationWorkflowState,
     runtime: Runtime[AgentWorkflowRuntime[VerificationAgentConfig]],
+    *,
+    skills: VerificationSkillSet,
 ) -> dict:
     request = state.request
     coding_result = request.coding_result
-    diff = request.repository_diff or (coding_result.final_diff if coding_result else "")
-    lowered = f"{diff}\n{_evidence_text(request)}".lower()
-    findings = [
-        VerificationFinding(
-            severity="warning",
-            code="warning_term_detected",
-            message=f"Verification found warning term: {term}",
+    output = await skills.regression_risk.run(
+        RegressionRiskInput(
+            repository_diff=_repository_diff(request),
+            evidence_text=_evidence_text(request),
+            changed_files=(coding_result.changed_files if coding_result else []),
+            rollback_available=(coding_result.rollback_plan.available if coding_result else None),
+            warning_terms=runtime.context.config.warning_terms,
+            sensitive_path_patterns=runtime.context.config.sensitive_path_patterns,
+            large_change_line_threshold=(runtime.context.config.large_change_line_threshold),
+            large_change_file_threshold=(runtime.context.config.large_change_file_threshold),
+            warn_on_sensitive_changes=(runtime.context.config.warn_on_sensitive_changes),
+            warn_on_missing_rollback=(runtime.context.config.warn_on_missing_rollback),
         )
-        for term in runtime.context.config.warning_terms
-        if term.lower() in lowered
-    ]
+    )
     agent_state = _with_findings(
         state.agent_state,
         phase="review_risk",
-        findings=findings,
+        findings=output.findings,
     )
+    agent_state.regression_risk = output.assessment
+    await persist_workflow_state(runtime.context, agent_state)
+    return {"agent_state": agent_state}
+
+
+async def _review_security_configuration(
+    state: VerificationWorkflowState,
+    runtime: Runtime[AgentWorkflowRuntime[VerificationAgentConfig]],
+    *,
+    skills: VerificationSkillSet,
+) -> dict:
+    output = await skills.security_configuration.run(
+        SecurityConfigurationInput(
+            repository_diff=_repository_diff(state.request),
+            enabled=runtime.context.config.security_review_enabled,
+        )
+    )
+    agent_state = _with_findings(
+        state.agent_state,
+        phase="review_security_configuration",
+        findings=output.findings,
+    )
+    agent_state.security_review = output.assessment
     await persist_workflow_state(runtime.context, agent_state)
     return {"agent_state": agent_state}
 
@@ -262,6 +320,8 @@ async def _review_risk(
 async def _return_verdict(
     state: VerificationWorkflowState,
     runtime: Runtime[AgentWorkflowRuntime[VerificationAgentConfig]],
+    *,
+    skills: VerificationSkillSet,
 ) -> dict:
     request = state.request
     verdict = _verdict(state.agent_state.findings)
@@ -280,6 +340,20 @@ async def _return_verdict(
         trace_step="return_verdict",
     )
     agent_state.verdict = verdict
+    coding_result = request.coding_result
+    summary_output = await skills.evidence_summary.run(
+        EvidenceSummaryInput(
+            repository_diff=_repository_diff(request),
+            changed_files=(coding_result.changed_files if coding_result else []),
+            external_test_evidence=request.test_evidence,
+            acceptance_coverage=agent_state.acceptance_coverage,
+            test_adequacy=agent_state.test_adequacy,
+            regression_risk=agent_state.regression_risk,
+            security_review=agent_state.security_review,
+            findings=agent_state.findings,
+        )
+    )
+    agent_state.evidence_summary = summary_output.summary
     state_ref = await persist_workflow_state(runtime.context, agent_state)
     result = VerificationAgentResult(
         execution_id=request.execution_id,
@@ -313,6 +387,11 @@ async def _return_verdict(
         ],
         verdict=verdict,
         findings=agent_state.findings,
+        acceptance_coverage=agent_state.acceptance_coverage,
+        test_adequacy=agent_state.test_adequacy,
+        regression_risk=agent_state.regression_risk,
+        security_review=agent_state.security_review,
+        evidence_summary=agent_state.evidence_summary,
     )
     return {"agent_state": agent_state, "result": result}
 
@@ -372,10 +451,50 @@ def _evidence_text(request: VerificationAgentRequest) -> str:
     return "\n".join(parts)
 
 
-def _criterion_supported(statement: str, evidence_text: str) -> bool:
-    terms = [term for term in re.findall(r"[a-z0-9]+", statement.lower()) if len(term) > 3]
-    if not terms:
-        return True
-    evidence = evidence_text.lower()
-    matched = [term for term in terms if term in evidence]
-    return len(matched) >= max(1, min(3, len(terms) // 2))
+def _acceptance_evidence(
+    request: VerificationAgentRequest,
+) -> list[AcceptanceEvidence]:
+    evidence = [
+        AcceptanceEvidence(source=f"test_evidence:{index}", content=content)
+        for index, content in enumerate(request.test_evidence, start=1)
+    ]
+    if request.repository_diff:
+        evidence.append(
+            AcceptanceEvidence(
+                source="repository_diff",
+                content=request.repository_diff,
+            )
+        )
+    if request.coding_result is None:
+        return evidence
+
+    coding_result = request.coding_result
+    evidence.append(
+        AcceptanceEvidence(
+            source="coding_result:final_diff",
+            content=coding_result.final_diff,
+        )
+    )
+    evidence.extend(
+        AcceptanceEvidence(
+            source=f"coding_result:evidence:{index}",
+            content=f"{item.title or ''}\n{item.excerpt or ''}",
+        )
+        for index, item in enumerate(coding_result.evidence, start=1)
+    )
+    evidence.extend(
+        AcceptanceEvidence(
+            source=f"coding_result:command:{index}",
+            content=f"{record.stdout}\n{record.stderr}",
+        )
+        for index, record in enumerate(coding_result.command_results, start=1)
+    )
+    return evidence
+
+
+def _repository_diff(request: VerificationAgentRequest) -> str:
+    if request.repository_diff:
+        return request.repository_diff
+    if request.coding_result is not None:
+        return request.coding_result.final_diff
+    return ""

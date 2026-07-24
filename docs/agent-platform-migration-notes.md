@@ -19,9 +19,13 @@ Current coding runtime:
 
 Current verification behavior:
 
-- Add `VerificationAgent` as an independent contract-first verifier.
-- It initially evaluates coding result status, diff presence, command evidence, acceptance criteria support, and warning terms.
-- Future work can move richer verification skills behind the same request/result/state contracts.
+- Keep `VerificationAgent` as an independent contract-first verifier.
+- Its graph composes agent-local typed skills for acceptance coverage, test adequacy, regression
+  risk, security/configuration review, and final evidence summarization.
+- New assessment fields on `VerificationAgentState` and `VerificationAgentResult` have defaults, so
+  existing persisted results and manually built contracts remain valid.
+- Stricter test-execution requirements and regression warnings are opt-in. Security review remains
+  enabled by default and error-level findings request coding changes.
 
 Current repository analysis:
 

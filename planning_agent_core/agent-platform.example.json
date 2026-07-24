@@ -43,7 +43,14 @@
       "approval_required": false,
       "settings": {
         "independent_workspace": true,
-        "require_diff_for_pass": true
+        "require_diff_for_pass": true,
+        "require_test_command_for_pass": false,
+        "require_test_evidence_for_source_changes": false,
+        "security_review_enabled": true,
+        "warn_on_sensitive_changes": false,
+        "warn_on_missing_rollback": false,
+        "large_change_line_threshold": 500,
+        "large_change_file_threshold": 20
       }
     },
     "security_review": {

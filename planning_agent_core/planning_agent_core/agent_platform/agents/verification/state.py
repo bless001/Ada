@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -10,22 +9,17 @@ from planning_agent_core.agent_platform.agents.base.contracts import (
     AgentResult,
     AgentRunStatus,
 )
+from planning_agent_core.agent_platform.agents.verification.contracts import (
+    AcceptanceCoverageAssessment,
+    RegressionRiskAssessment,
+    SecurityConfigurationAssessment,
+    TestAdequacyAssessment,
+    VerificationEvidenceSummary,
+    VerificationFinding,
+    VerificationVerdict,
+)
 from planning_agent_core.domain.coding import CodingAttemptResult
 from planning_agent_core.schemas import AcceptanceCriterionSpec
-
-
-class VerificationVerdict(StrEnum):
-    PASSED = "passed"
-    PASSED_WITH_WARNINGS = "passed_with_warnings"
-    CHANGES_REQUESTED = "changes_requested"
-    BLOCKED = "blocked"
-
-
-class VerificationFinding(BaseModel):
-    severity: str
-    code: str
-    message: str
-    acceptance_criterion_key: str | None = None
 
 
 class VerificationAgentRequest(AgentRequest):
@@ -41,6 +35,17 @@ class VerificationAgentState(BaseModel):
     workflow_trace: list[str] = Field(default_factory=list)
     verdict: VerificationVerdict | None = None
     findings: list[VerificationFinding] = Field(default_factory=list)
+    acceptance_coverage: AcceptanceCoverageAssessment = Field(
+        default_factory=AcceptanceCoverageAssessment
+    )
+    test_adequacy: TestAdequacyAssessment = Field(default_factory=TestAdequacyAssessment)
+    regression_risk: RegressionRiskAssessment = Field(default_factory=RegressionRiskAssessment)
+    security_review: SecurityConfigurationAssessment = Field(
+        default_factory=SecurityConfigurationAssessment
+    )
+    evidence_summary: VerificationEvidenceSummary = Field(
+        default_factory=VerificationEvidenceSummary
+    )
 
 
 class VerificationAgentResult(AgentResult):
@@ -48,3 +53,14 @@ class VerificationAgentResult(AgentResult):
     status: AgentRunStatus
     verdict: VerificationVerdict
     findings: list[VerificationFinding] = Field(default_factory=list)
+    acceptance_coverage: AcceptanceCoverageAssessment = Field(
+        default_factory=AcceptanceCoverageAssessment
+    )
+    test_adequacy: TestAdequacyAssessment = Field(default_factory=TestAdequacyAssessment)
+    regression_risk: RegressionRiskAssessment = Field(default_factory=RegressionRiskAssessment)
+    security_review: SecurityConfigurationAssessment = Field(
+        default_factory=SecurityConfigurationAssessment
+    )
+    evidence_summary: VerificationEvidenceSummary = Field(
+        default_factory=VerificationEvidenceSummary
+    )
