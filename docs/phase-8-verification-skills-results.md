@@ -135,5 +135,6 @@ Results:
 
 ## Remaining Phase 8 Work
 
-- Add verification-specific configurable human override with an explicit audit record.
+- Verification-specific override and audit are complete; see
+  `docs/phase-8-verification-override-results.md`.
 - Project verification status, evidence summary, and override history to OpenProject.

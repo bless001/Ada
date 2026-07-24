@@ -2,15 +2,35 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from planning_agent_core.agent_platform.agents.base.errors import AgentValidationError
+from planning_agent_core.agent_platform.agents.verification.config import (
+    VerificationAgentConfig,
+)
+from planning_agent_core.agent_platform.agents.verification.override import (
+    VerificationOverrideCommand,
+    VerificationOverridePolicyError,
+    VerificationOverrideType,
+    assess_verification_override,
+)
+from planning_agent_core.agent_platform.agents.verification.state import (
+    VerificationAgentResult,
+)
+from planning_agent_core.agent_platform.config.models import (
+    AgentConfig,
+    materialize_agent_config,
+)
 from planning_agent_core.agent_platform.factory import AgentFactory, create_default_agent_factory
 from planning_agent_core.agent_platform.orchestration import (
     AgentExecutionRequest,
     AgentFlowApproval,
     AgentFlowNotFoundError,
     AgentFlowOrchestrator,
+    AgentFlowOverrideRecord,
     AgentFlowResult,
     AgentFlowStore,
+    AgentFlowVersionConflictError,
     AgentOrchestrationResult,
     AgentOrchestrator,
     AgentTransitionRequestResolver,
@@ -139,6 +159,66 @@ class AgentPlatformService:
         if snapshot is None:
             raise AgentFlowNotFoundError(f"Agent flow not found for workflow: {workflow_id}")
         return snapshot
+
+    async def override_verification_flow(
+        self,
+        *,
+        flow_id: UUID,
+        expected_version: int,
+        command: VerificationOverrideCommand,
+    ) -> PersistedAgentFlow:
+        self._require_flow_store()
+        current = await self.get_flow(flow_id)
+        if current.version != expected_version:
+            raise AgentFlowVersionConflictError(
+                f"Agent flow version conflict: expected {expected_version}, found {current.version}"
+            )
+        if current.status != AgentFlowStatus.WAITING_FOR_APPROVAL:
+            raise AgentValidationError("Verification override requires a flow waiting for approval")
+        if not current.steps:
+            raise AgentValidationError(
+                "Verification override requires a persisted Verification Agent step"
+            )
+
+        source = current.steps[-1]
+        if source.agent_type != "verification":
+            raise AgentValidationError(
+                "Verification override can only target the latest Verification Agent step"
+            )
+        try:
+            result = VerificationAgentResult.model_validate(source.result_payload)
+            generic_config = AgentConfig.model_validate(source.request_payload.get("config"))
+            config = VerificationAgentConfig.model_validate(
+                materialize_agent_config(generic_config)
+            )
+            assessment = assess_verification_override(
+                config=config,
+                result=result,
+            )
+        except (ValidationError, VerificationOverridePolicyError) as exc:
+            raise AgentValidationError(str(exc)) from exc
+
+        override = AgentFlowOverrideRecord(
+            override_type=VerificationOverrideType.COMPLETION.value,
+            source_step_sequence=source.sequence,
+            source_agent_type=source.agent_type,
+            source_execution_id=source.execution_id,
+            source_result_id=source.result_id,
+            original_status=result.status,
+            original_next_action=result.next_action,
+            original_outcome=assessment.original_verdict,
+            finding_codes=assessment.finding_codes,
+            affected_item_keys=assessment.acceptance_criterion_keys,
+            actor=command.actor,
+            reason=command.reason,
+            override_reference=command.override_reference,
+            metadata=command.metadata,
+        )
+        return await self.flow_store.complete_override(
+            flow_id=flow_id,
+            expected_version=expected_version,
+            override=override,
+        )
 
     async def resume_flow(
         self,

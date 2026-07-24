@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from planning_agent_core.agent_platform.agents.base.contracts import (
     AgentNextAction,
@@ -46,6 +46,27 @@ class AgentFlowApproval(BaseModel):
     approval_reference: str = Field(min_length=1)
     actor: str | None = None
     reason: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    recorded_at: datetime = Field(default_factory=_utc_now)
+
+
+class AgentFlowOverrideRecord(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    override_id: UUID = Field(default_factory=uuid4)
+    override_type: str = Field(min_length=1, max_length=120)
+    source_step_sequence: int = Field(ge=1)
+    source_agent_type: str = Field(min_length=1)
+    source_execution_id: UUID
+    source_result_id: UUID
+    original_status: AgentRunStatus
+    original_next_action: AgentNextAction
+    original_outcome: str = Field(min_length=1)
+    finding_codes: list[str] = Field(default_factory=list)
+    affected_item_keys: list[str] = Field(default_factory=list)
+    actor: str = Field(min_length=1, max_length=160)
+    reason: str = Field(min_length=1, max_length=4000)
+    override_reference: str = Field(min_length=1, max_length=240)
     metadata: dict[str, Any] = Field(default_factory=dict)
     recorded_at: datetime = Field(default_factory=_utc_now)
 
@@ -98,6 +119,7 @@ class PersistedAgentFlow(BaseModel):
     resume_count: int = Field(default=0, ge=0)
     recovery_count: int = Field(default=0, ge=0)
     approvals: list[AgentFlowApproval] = Field(default_factory=list)
+    overrides: list[AgentFlowOverrideRecord] = Field(default_factory=list)
     lease: AgentFlowLease | None = None
     recoveries: list[AgentFlowRecoveryRecord] = Field(default_factory=list)
     execution_options: AgentFlowExecutionOptions = Field(default_factory=AgentFlowExecutionOptions)
@@ -179,6 +201,14 @@ class AgentFlowStore(Protocol):
         reason: str,
         expected_version: int,
         approval: AgentFlowApproval,
+    ) -> PersistedAgentFlow: ...
+
+    async def complete_override(
+        self,
+        *,
+        flow_id: UUID,
+        expected_version: int,
+        override: AgentFlowOverrideRecord,
     ) -> PersistedAgentFlow: ...
 
     async def get(self, flow_id: UUID) -> PersistedAgentFlow | None: ...
@@ -390,6 +420,19 @@ class InMemoryAgentFlowStore:
             reason=reason,
             approval=approval,
         )
+        self.flows[flow_id] = snapshot
+        return snapshot.model_copy(deep=True)
+
+    async def complete_override(
+        self,
+        *,
+        flow_id: UUID,
+        expected_version: int,
+        override: AgentFlowOverrideRecord,
+    ) -> PersistedAgentFlow:
+        current = self._require(flow_id)
+        _check_version(current, expected_version)
+        snapshot = complete_override_snapshot(current, override=override)
         self.flows[flow_id] = snapshot
         return snapshot.model_copy(deep=True)
 
@@ -770,6 +813,52 @@ def close_flow_snapshot(
             "resume_count": current.resume_count + 1,
             "approvals": [*current.approvals, approval],
             "updated_at": _utc_now(),
+        },
+    )
+
+
+def complete_override_snapshot(
+    current: PersistedAgentFlow,
+    *,
+    override: AgentFlowOverrideRecord,
+) -> PersistedAgentFlow:
+    if current.status != AgentFlowStatus.WAITING_FOR_APPROVAL:
+        raise AgentFlowPersistenceError(
+            "Only a flow waiting for approval can be completed by override"
+        )
+    if not current.steps:
+        raise AgentFlowPersistenceError("Override requires a persisted source step")
+    source = current.steps[-1]
+    if (
+        override.source_step_sequence != source.sequence
+        or override.source_agent_type != source.agent_type
+        or override.source_execution_id != source.execution_id
+        or override.source_result_id != source.result_id
+    ):
+        raise AgentFlowPersistenceError(
+            "Override source identity must match the latest persisted flow step"
+        )
+    if any(
+        existing.override_reference == override.override_reference for existing in current.overrides
+    ):
+        raise AgentFlowPersistenceError(
+            f"Override reference already exists: {override.override_reference}"
+        )
+
+    return current.model_copy(
+        deep=True,
+        update={
+            "status": AgentFlowStatus.COMPLETED,
+            "version": current.version + 1,
+            "pending_route": None,
+            "pending_execution_payload": None,
+            "lease": None,
+            "reason": (
+                f"Flow completed by {override.override_type} override "
+                f"from {override.actor}: {override.reason}"
+            ),
+            "overrides": [*current.overrides, override],
+            "updated_at": override.recorded_at,
         },
     )
 

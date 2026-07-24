@@ -310,7 +310,8 @@ Implementation status on 2026-07-24:
   review, final evidence summary, persisted per-node state, and verdict routing.
 - Complete: the application transition resolver converts `changes_requested` into a linked coding
   rework request when a prepared rework attempt is available.
-- Remaining: verification-specific configurable human override with an explicit audit record.
+- Complete: configuration-driven Verification override gates, typed override commands, immutable
+  original results, and durable PostgreSQL-backed actor/reason/reference audit records.
 - Remaining: projection of verification status, evidence, and override history to OpenProject.
 
 ## Phase 9: E2E Hardening And Documentation

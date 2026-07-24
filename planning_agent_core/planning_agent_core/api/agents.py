@@ -10,13 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from planning_agent_core.agent_platform.agents.base import AgentResult
 from planning_agent_core.agent_platform.agents.coding import CodingAgentRequest
 from planning_agent_core.agent_platform.agents.planning import PlanningAgentRequest
-from planning_agent_core.agent_platform.agents.verification import VerificationAgentRequest
+from planning_agent_core.agent_platform.agents.verification import (
+    VerificationAgentRequest,
+    VerificationOverrideCommand,
+)
 from planning_agent_core.agent_platform.config import AgentConfig, load_agent_platform_config
 from planning_agent_core.agent_platform.orchestration import (
     AgentExecutionRequest,
     AgentFlowApproval,
     AgentFlowLeaseConflictError,
     AgentFlowNotFoundError,
+    AgentFlowPersistenceError,
     AgentFlowVersionConflictError,
     AgentRouteDecision,
     PersistedAgentFlow,
@@ -59,6 +63,10 @@ class AgentFlowResumePayload(BaseModel):
     correlation_id: str | None = None
     approval: AgentFlowApproval | None = None
     max_steps: int = Field(default=10, ge=1, le=100)
+
+
+class AgentVerificationOverridePayload(VerificationOverrideCommand):
+    expected_version: int = Field(ge=1)
 
 
 class AgentFlowHeartbeatPayload(BaseModel):
@@ -174,6 +182,28 @@ async def get_agent_flow(
     service = create_agent_platform_service_for_db(db)
     try:
         return await service.get_flow(flow_id)
+    except Exception as exc:
+        raise _flow_http_exception(exc) from exc
+
+
+@router.post(
+    "/flows/{flow_id}/verification-override",
+    response_model=PersistedAgentFlow,
+)
+async def override_agent_verification(
+    flow_id: UUID,
+    payload: AgentVerificationOverridePayload,
+    db: AsyncSession = Depends(get_db),
+) -> PersistedAgentFlow:
+    service = create_agent_platform_service_for_db(db)
+    try:
+        return await service.override_verification_flow(
+            flow_id=flow_id,
+            expected_version=payload.expected_version,
+            command=VerificationOverrideCommand.model_validate(
+                payload.model_dump(exclude={"expected_version"})
+            ),
+        )
     except Exception as exc:
         raise _flow_http_exception(exc) from exc
 
@@ -300,6 +330,8 @@ def _flow_http_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, AgentFlowVersionConflictError):
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, AgentFlowLeaseConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, AgentFlowPersistenceError):
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, AgentValidationError):
         return HTTPException(status_code=409, detail=str(exc))

@@ -155,6 +155,8 @@ Verification Agent:
   regression risk, security/configuration review, and final evidence summarization.
 - Persists each typed assessment in its independent checkpoint state and includes the assessments
   in `VerificationAgentResult`.
+- Optionally pauses eligible negative verdicts for a human override without changing the original
+  result, findings, or evidence.
 - Produces one of `passed`, `passed_with_warnings`, `changes_requested`, or `blocked`.
 - Returns completion, coding rework, or escalation transitions.
 
@@ -162,6 +164,13 @@ Verification skills do not import the agent or workflow. Graph nodes translate r
 skill input contracts and append returned findings. Failed commands, unsatisfied acceptance
 criteria, and error-level security findings prevent completion. Requirements for an executed test
 command and source-change test evidence are configurable to support gradual migration.
+
+Human override is disabled by default. When enabled, `VerificationAgentConfig` limits eligible
+verdicts and the agent requests an approval gate. `AgentPlatformService` reconstructs policy from
+the persisted Verification step before accepting a `VerificationOverrideCommand`. A successful
+override completes the flow and appends an `AgentFlowOverrideRecord`; it does not replace the
+failed source result. The audit captures source identities, original outcome, finding and
+criterion keys, actor, reason, reference, metadata, and timestamp.
 
 ## Factory And Registration
 

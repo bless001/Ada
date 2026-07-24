@@ -38,6 +38,8 @@ Added a modular `agent_platform` package that generalizes the existing planning-
 - Verification evaluation is split into typed acceptance, test-adequacy, regression-risk,
   security/configuration, and evidence-summary skills. Their assessments are persisted in
   Verification Agent checkpoints and returned through its specialized result.
+- Verification failures can optionally pause for a typed human override. Durable flow state
+  preserves the original result and appends a PostgreSQL-backed override audit record.
 - JSON configuration models, default config, loader, and example config.
 - Lazy `planning_agent_core.skills` package initialization so platform imports do not require LLM environment settings.
 - Contract, factory, orchestration, and checkpoint tests using fake dependencies.
@@ -65,10 +67,10 @@ Results:
 
 - Ruff: passed.
 - Focused platform and flow tests: passed.
-- Full test suite with PostgreSQL integrations enabled: 205 passed, 1 skipped, 4 existing
+- Full test suite with PostgreSQL integrations enabled: 210 passed, 1 skipped, 4 existing
   warnings.
 
 ## Remaining Follow-Up
 
-- Add verification-specific audited human override and OpenProject evidence projection.
+- Add OpenProject projection for verification status, evidence, and override history.
 - Add integration tests against live OpenProject/Neo4j/Weaviate for platform-driven projections.

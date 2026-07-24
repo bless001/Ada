@@ -22,6 +22,8 @@ models at the HTTP boundary.
 - Flow version and lease conflicts map to HTTP `409`.
 - Recovery reuses persisted workflow, correlation, and configuration identity and requires the
   original typed request.
+- Added a typed Verification override endpoint that enforces persisted policy and optimistic
+  versioning while retaining the original failed result.
 
 ## Endpoint
 
@@ -33,6 +35,7 @@ GET  /v1/agents/flows/{flow_id}
 POST /v1/agents/flows/{flow_id}/heartbeat
 POST /v1/agents/flows/{flow_id}/recover
 POST /v1/agents/flows/{flow_id}/resume
+POST /v1/agents/flows/{flow_id}/verification-override
 ```
 
 Example planning payload:

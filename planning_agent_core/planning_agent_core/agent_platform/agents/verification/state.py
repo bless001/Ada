@@ -46,6 +46,7 @@ class VerificationAgentState(BaseModel):
     evidence_summary: VerificationEvidenceSummary = Field(
         default_factory=VerificationEvidenceSummary
     )
+    human_override_eligible: bool = False
 
 
 class VerificationAgentResult(AgentResult):
@@ -64,3 +65,4 @@ class VerificationAgentResult(AgentResult):
     evidence_summary: VerificationEvidenceSummary = Field(
         default_factory=VerificationEvidenceSummary
     )
+    human_override_eligible: bool = False

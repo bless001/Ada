@@ -18,11 +18,13 @@ from planning_agent_core.agent_platform.orchestration.flow_persistence import (
     AgentFlowApproval,
     AgentFlowLease,
     AgentFlowNotFoundError,
+    AgentFlowOverrideRecord,
     AgentFlowVersionConflictError,
     PersistedAgentFlow,
     begin_resume_snapshot,
     claim_queued_flow_snapshot,
     close_flow_snapshot,
+    complete_override_snapshot,
     complete_run_snapshot,
     escalate_exhausted_recovery_snapshot,
     recover_flow_snapshot,
@@ -278,6 +280,25 @@ class SqlAlchemyAgentFlowStore:
                 reason=reason,
                 approval=approval,
             )
+            _write_snapshot(record, snapshot)
+            await self.db.commit()
+            return snapshot
+        except Exception:
+            await self.db.rollback()
+            raise
+
+    async def complete_override(
+        self,
+        *,
+        flow_id: UUID,
+        expected_version: int,
+        override: AgentFlowOverrideRecord,
+    ) -> PersistedAgentFlow:
+        try:
+            record = await self._lock(flow_id)
+            current = _read_snapshot(record)
+            _check_version(current, expected_version)
+            snapshot = complete_override_snapshot(current, override=override)
             _write_snapshot(record, snapshot)
             await self.db.commit()
             return snapshot

@@ -333,6 +333,9 @@ async def _return_verdict(
     elif verdict == VerificationVerdict.BLOCKED:
         status = AgentRunStatus.BLOCKED
         next_action = AgentNextAction.ESCALATE
+    human_override_eligible = runtime.context.config.allows_human_override(verdict)
+    if human_override_eligible:
+        next_action = AgentNextAction.REQUEST_APPROVAL
 
     agent_state = _advance(
         state.agent_state,
@@ -340,6 +343,7 @@ async def _return_verdict(
         trace_step="return_verdict",
     )
     agent_state.verdict = verdict
+    agent_state.human_override_eligible = human_override_eligible
     coding_result = request.coding_result
     summary_output = await skills.evidence_summary.run(
         EvidenceSummaryInput(
@@ -392,6 +396,7 @@ async def _return_verdict(
         regression_risk=agent_state.regression_risk,
         security_review=agent_state.security_review,
         evidence_summary=agent_state.evidence_summary,
+        human_override_eligible=agent_state.human_override_eligible,
     )
     return {"agent_state": agent_state, "result": result}
 

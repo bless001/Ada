@@ -28,11 +28,13 @@ from planning_agent_core.api.agents import (
     AgentFlowRecoveryPayload,
     AgentFlowResumePayload,
     AgentFlowStartPayload,
+    AgentVerificationOverridePayload,
     create_agent_platform_service_for_db,
     enqueue_agent_flow,
     execute_agent,
     get_agent_flow_by_workflow,
     heartbeat_agent_flow,
+    override_agent_verification,
     recover_agent_flow,
     router,
     resume_agent_flow,
@@ -115,6 +117,10 @@ class FakeFlowService:
         self.calls.append(("resume", kwargs))
         return "resumed"
 
+    async def override_verification_flow(self, **kwargs):
+        self.calls.append(("verification_override", kwargs))
+        return "overridden"
+
 
 def test_agent_flow_operational_routes_are_registered_before_dynamic_lookup():
     paths = [route.path for route in router.routes]
@@ -123,6 +129,7 @@ def test_agent_flow_operational_routes_are_registered_before_dynamic_lookup():
     assert "/v1/agents/flows/async" in paths
     assert "/v1/agents/flows/{flow_id}/heartbeat" in paths
     assert "/v1/agents/flows/{flow_id}/recover" in paths
+    assert "/v1/agents/flows/{flow_id}/verification-override" in paths
     assert paths.index("/v1/agents/flows/by-workflow") < paths.index(
         "/v1/agents/flows/{flow_id}"
     )
@@ -313,6 +320,35 @@ async def test_resume_agent_flow_uses_stored_workflow_identity(monkeypatch):
     assert resume_kwargs["request"].correlation_id == "resume-correlation"
     assert resume_kwargs["approval"].approval_reference == "approval-api-1"
     assert resume_kwargs["max_steps"] == 3
+
+
+@pytest.mark.asyncio
+async def test_override_agent_verification_passes_typed_audit_command(monkeypatch):
+    fake_service = FakeFlowService()
+    monkeypatch.setattr(
+        "planning_agent_core.api.agents.create_agent_platform_service_for_db",
+        lambda db: fake_service,
+    )
+    flow_id = uuid4()
+    payload = AgentVerificationOverridePayload(
+        expected_version=2,
+        actor="reviewer@example.test",
+        reason="Approved by change control.",
+        override_reference="change-control-417",
+        metadata={"ticket": "CC-417"},
+    )
+
+    response = await override_agent_verification(flow_id, payload, db=object())
+
+    assert response == "overridden"
+    operation, kwargs = fake_service.calls[-1]
+    assert operation == "verification_override"
+    assert kwargs["flow_id"] == flow_id
+    assert kwargs["expected_version"] == 2
+    assert kwargs["command"].actor == "reviewer@example.test"
+    assert kwargs["command"].reason == "Approved by change control."
+    assert kwargs["command"].override_reference == "change-control-417"
+    assert kwargs["command"].metadata == {"ticket": "CC-417"}
 
 
 @pytest.mark.asyncio

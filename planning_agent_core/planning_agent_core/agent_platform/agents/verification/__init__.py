@@ -18,6 +18,13 @@ from planning_agent_core.agent_platform.agents.verification.contracts import (
     TestAdequacyAssessment,
     VerificationEvidenceSummary,
 )
+from planning_agent_core.agent_platform.agents.verification.override import (
+    VerificationOverrideAssessment,
+    VerificationOverrideCommand,
+    VerificationOverridePolicyError,
+    VerificationOverrideType,
+    assess_verification_override,
+)
 from planning_agent_core.agent_platform.agents.verification.state import (
     VerificationAgentRequest,
     VerificationAgentResult,
@@ -46,6 +53,11 @@ __all__ = [
     "TestAdequacyAssessment",
     "VerificationEvidenceSummary",
     "VerificationFinding",
+    "VerificationOverrideAssessment",
+    "VerificationOverrideCommand",
+    "VerificationOverridePolicyError",
+    "VerificationOverrideType",
     "VerificationVerdict",
+    "assess_verification_override",
     "register_verification_agent",
 ]

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
+from planning_agent_core.agent_platform.agents.verification.contracts import (
+    VerificationVerdict,
+)
 from planning_agent_core.agent_platform.config.models import AgentConfig
 
 
@@ -30,3 +33,36 @@ class VerificationAgentConfig(AgentConfig):
     warn_on_sensitive_changes: bool = False
     warn_on_missing_rollback: bool = False
     security_review_enabled: bool = True
+    human_override_enabled: bool = False
+    human_override_allowed_verdicts: list[VerificationVerdict] = Field(
+        default_factory=lambda: [VerificationVerdict.CHANGES_REQUESTED]
+    )
+
+    @field_validator("human_override_allowed_verdicts")
+    @classmethod
+    def override_verdicts_must_require_intervention(
+        cls,
+        value: list[VerificationVerdict],
+    ) -> list[VerificationVerdict]:
+        invalid = set(value) - {
+            VerificationVerdict.CHANGES_REQUESTED,
+            VerificationVerdict.BLOCKED,
+        }
+        if invalid:
+            raise ValueError(
+                "human overrides can only target changes_requested or blocked verdicts"
+            )
+        if len(value) != len(set(value)):
+            raise ValueError("human_override_allowed_verdicts cannot contain duplicates")
+        return value
+
+    @model_validator(mode="after")
+    def enabled_override_requires_an_eligible_verdict(self) -> "VerificationAgentConfig":
+        if self.human_override_enabled and not self.human_override_allowed_verdicts:
+            raise ValueError(
+                "human_override_allowed_verdicts cannot be empty when override is enabled"
+            )
+        return self
+
+    def allows_human_override(self, verdict: VerificationVerdict) -> bool:
+        return self.human_override_enabled and verdict in self.human_override_allowed_verdicts

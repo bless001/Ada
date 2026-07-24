@@ -26,6 +26,10 @@ Current verification behavior:
   existing persisted results and manually built contracts remain valid.
 - Stricter test-execution requirements and regression warnings are opt-in. Security review remains
   enabled by default and error-level findings request coding changes.
+- Human override is disabled by default. Enabling it for selected negative verdicts changes the
+  next action to an approval gate but does not mutate the original Verification result.
+- Applied overrides are appended to durable flow JSON as typed `AgentFlowOverrideRecord` entries.
+  Existing rows remain readable because the new list defaults to empty.
 
 Current repository analysis:
 

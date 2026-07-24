@@ -21,6 +21,7 @@ from planning_agent_core.domain.repositories import RepositoryBinding
 from planning_agent_core.models import (
     AgentJob,
     AgentPlatformCheckpointRecord,
+    AgentPlatformFlowRecord,
     AgentPlatformResultRecord,
     ApprovalRecord,
     CodingAttemptRecord,
@@ -574,6 +575,111 @@ async def test_agent_platform_postgres_checkpoint_and_result_stores(
             assert result_record.status == AgentRunStatus.SUCCEEDED.value
             assert payload is not None
             assert payload["next_action"] == AgentNextAction.RUN_CODING.value
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_verification_override_audit_survives_flow_store_recreation(
+    migrated_postgres_url: str,
+):
+    from planning_agent_core.agent_platform.agents.verification import (
+        VerificationAgentRequest,
+        VerificationOverrideCommand,
+        VerificationVerdict,
+    )
+    from planning_agent_core.agent_platform.config import AgentConfig
+    from planning_agent_core.agent_platform.orchestration import (
+        AgentExecutionRequest,
+        AgentFlowStatus,
+    )
+    from planning_agent_core.agent_platform.runtime import AgentDependencyContainer
+    from planning_agent_core.domain.coding import CodingAttemptResult, RollbackPlan
+    from planning_agent_core.domain.enums import CodingAttemptStatus
+    from planning_agent_core.persistence.agent_flows import SqlAlchemyAgentFlowStore
+    from planning_agent_core.schemas import AcceptanceCriterionSpec
+    from planning_agent_core.services.agent_platform_service import (
+        create_agent_platform_service,
+    )
+
+    engine = create_async_engine(migrated_postgres_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    flow_id = None
+
+    try:
+        async with session_factory() as session:
+            workflow_id = f"verification-override-{uuid4()}"
+            service = create_agent_platform_service(
+                AgentDependencyContainer(),
+                flow_store=SqlAlchemyAgentFlowStore(session),
+            )
+            execution = AgentExecutionRequest(
+                workflow_id=workflow_id,
+                agent_type="verification",
+                request=VerificationAgentRequest(
+                    project_id=f"override-project-{uuid4()}",
+                    task_id="task.verification-override",
+                    objective="Verify durable override auditing.",
+                    acceptance_criteria=[
+                        AcceptanceCriterionSpec(
+                            key="ac.durable-override",
+                            statement="Override audit survives store recreation.",
+                            verification_method="integration_test",
+                        )
+                    ],
+                    coding_result=CodingAttemptResult(
+                        task_key="task.verification-override",
+                        repository_key="demo",
+                        attempt_number=1,
+                        status=CodingAttemptStatus.SUCCEEDED,
+                        changed_files=["src/feature.py"],
+                        final_diff="+unrelated implementation detail\n",
+                        rollback_plan=RollbackPlan(
+                            available=True,
+                            strategy="reverse_diff",
+                            changed_files=["src/feature.py"],
+                        ),
+                    ),
+                ),
+                config=AgentConfig(
+                    agent_type="verification",
+                    checkpoint_namespace="verification",
+                    settings={
+                        "human_override_enabled": True,
+                        "human_override_allowed_verdicts": ["changes_requested"],
+                    },
+                ),
+            )
+            waiting = await service.start_flow(execution)
+            completed = await service.override_verification_flow(
+                flow_id=waiting.flow_id,
+                expected_version=waiting.version,
+                command=VerificationOverrideCommand(
+                    actor="postgres-reviewer",
+                    reason="Approved through durable change control.",
+                    override_reference=f"postgres-override-{uuid4()}",
+                ),
+            )
+            flow_id = completed.flow_id
+
+            assert waiting.status == AgentFlowStatus.WAITING_FOR_APPROVAL
+            assert completed.status == AgentFlowStatus.COMPLETED
+            assert completed.overrides[0].original_outcome == (
+                VerificationVerdict.CHANGES_REQUESTED.value
+            )
+
+        async with session_factory() as recreated_session:
+            reloaded = await SqlAlchemyAgentFlowStore(recreated_session).get(flow_id)
+            record = await recreated_session.get(AgentPlatformFlowRecord, flow_id)
+
+            assert reloaded is not None
+            assert reloaded.status == AgentFlowStatus.COMPLETED
+            assert reloaded.overrides[0].actor == "postgres-reviewer"
+            assert reloaded.overrides[0].finding_codes == ["acceptance_criterion_unmet"]
+            assert record is not None
+            assert record.flow_json["overrides"][0]["source_agent_type"] == (
+                "verification"
+            )
     finally:
         await engine.dispose()
 
