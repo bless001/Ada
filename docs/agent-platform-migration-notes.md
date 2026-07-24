@@ -7,7 +7,8 @@ The platform refactor is additive. The current APIs, service classes, workflow m
 Current planning runtime:
 
 - Keep `planning_agent_core/workflow/*` as the existing LangGraph planning workflow.
-- Wrap it through `PlanningAgent` where a session-based plan is needed via the injected `planning_service`.
+- New platform requests run through the independent Planning Agent graph. It can still use the
+  injected legacy `planning_service` for session-based plan generation.
 - Keep planning skills in `planning_agent_core/skills/*`; agent-specific planning modules compose them rather than copying logic.
 
 Current coding runtime:
@@ -57,6 +58,8 @@ Current infrastructure ports:
 - `planning_agent_core/planning_agent_core/workers/agent_flow_worker.py`
 - `planning_agent_core/planning_agent_core/services/agent_execution_codec.py`
 - `planning_agent_core/planning_agent_core/services/agent_platform_composition.py`
+- `planning_agent_core/planning_agent_core/agent_platform/agents/base/workflow.py`
+- `tests/test_agent_internal_workflows.py`
 - `tests/test_agent_platform.py`
 - `tests/test_agent_flow_persistence.py`
 - `tests/test_agent_flow_postgres_integration.py`
@@ -72,11 +75,16 @@ Current infrastructure ports:
   aggregate flow records.
 - `planning_agent_core/planning_agent_core/main.py` now includes the agents router.
 - `planning_agent_core/planning_agent_core/application/project_orchestrator.py` can route resumable planning events through `AgentPlatformService`.
+- Planning, Coding, and Verification `workflow.py` modules now compile independent LangGraph state
+  machines; their `agent.py` modules retain lifecycle, validation, and builder responsibilities.
 
 ## Compatibility Risks
 
 - Some callers may have relied on importing skill classes directly from `planning_agent_core.skills`. Current repository tests only import `build_skill_registry` from that package root. If external callers require root-level skill class imports, add explicit lazy accessors or compatibility exports.
 - `PlanningAgent` can wrap the legacy planning service, but the existing planning workflow remains the richer production path until all planning skills are wired into the agent workflow.
+- Platform checkpoints persist the latest completed graph phase rather than native LangGraph
+  channel snapshots. Adopt native per-agent checkpointers only when interrupts or node replay are
+  required; do not introduce one shared cross-agent graph.
 - `VerificationAgent` is intentionally conservative. Missing diffs or blocked coding attempts route to escalation rather than guessing.
 - In-memory checkpointing, results, and flow stores remain available for tests. Database-backed API
   composition injects PostgreSQL implementations for all three.

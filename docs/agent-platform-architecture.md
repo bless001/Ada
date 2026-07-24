@@ -119,6 +119,16 @@ Durable flow boundaries use `PersistedAgentFlow`, `AgentFlowStepRecord`, `AgentF
 `AgentFlowLease`, and `AgentFlowRecoveryRecord`. Raw request/result payloads are stored only as
 audit and recovery data; agents still communicate through typed contracts.
 
+Each concrete agent delegates execution to a separately compiled LangGraph:
+
+- `planning-agent-workflow`
+- `coding-agent-workflow`
+- `verification-agent-workflow`
+
+The graphs use agent-specific Pydantic workflow state and typed `AgentWorkflowRuntime` context.
+Dependencies and execution metadata are runtime context, not shared graph-state fields. The graphs
+return the existing specialized result contracts to the orchestrator and never invoke one another.
+
 ## Agent Responsibilities
 
 Planning Agent:
@@ -279,7 +289,12 @@ Checkpoint identity includes:
 - `thread_id`
 - `checkpoint_id`
 
-The current implementation includes `InMemoryCheckpointStore` for tests and local contract validation. `SqlAlchemyAgentCheckpointStore` persists platform checkpoints in `agent_platform_checkpoints`.
+The current implementation includes `InMemoryCheckpointStore` for tests and local contract
+validation. `SqlAlchemyAgentCheckpointStore` persists platform checkpoints in
+`agent_platform_checkpoints`. Every meaningful internal graph node saves its agent-specific state
+through this port. `workflow_trace` records node progress independently from the business `phase`.
+If graph execution fails, the structured failure checkpoint retains the prior node state under
+`last_workflow_state`.
 
 Agent results can be stored through `SqlAlchemyAgentResultStore`, which writes typed result payloads to `agent_platform_results`. The orchestrator uses `dependencies.result_store` when no explicit result store is supplied.
 
@@ -303,7 +318,9 @@ columns into legacy JSON aggregates until the next aggregate write normalizes th
 Migration `0014_queued_agent_flows` adds the `queued` aggregate status. PostgreSQL is the durable
 flow queue; no second queue message must be reconciled with the aggregate.
 
-PostgreSQL-backed LangGraph checkpointing remains available in the existing workflow package for internal LangGraph workflows and can be used inside each agent where needed.
+These platform checkpoints remain separate from native LangGraph snapshots. PostgreSQL-backed
+LangGraph checkpointing remains available in the compatibility workflow package and can be adopted
+per agent later for native interrupts or node replay without creating one cross-agent graph.
 
 ## Adapters And Dependency Injection
 
@@ -403,5 +420,7 @@ The new platform test suite covers:
 - Live PostgreSQL flow persistence, JSONB reloading, indexed aggregate fields, and migration-head
   validation.
 - Checkpoint namespace isolation and failure checkpoint preservation.
+- Independent Planning, Coding, and Verification graph topology, conditional routing, node traces,
+  and partial-state preservation.
 
 The tests use fake dependencies and do not require Docker, OpenProject, Neo4j, Weaviate, or a live LLM.

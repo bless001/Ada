@@ -5,7 +5,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from planning_agent_core.agent_platform.agents.base.contracts import AgentRequest, AgentResult, AgentRunStatus
+from planning_agent_core.agent_platform.agents.base.contracts import (
+    AgentRequest,
+    AgentResult,
+    AgentRunStatus,
+)
 from planning_agent_core.schemas import ProjectPlanSpec
 from planning_agent_core.skills.plan_validation import PlanValidationOutput
 from planning_agent_core.skills.requirement_extraction import NormalizedRequirement
@@ -31,6 +35,7 @@ class PlanningAgentRequest(AgentRequest):
 
 class PlanningAgentState(BaseModel):
     phase: str = "created"
+    workflow_trace: list[str] = Field(default_factory=list)
     extracted_requirements: list[NormalizedRequirement] = Field(default_factory=list)
     plan: ProjectPlanSpec | None = None
     validation: PlanValidationOutput | None = None

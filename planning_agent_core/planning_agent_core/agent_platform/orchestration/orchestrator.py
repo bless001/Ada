@@ -168,14 +168,20 @@ class AgentOrchestrator:
     ) -> AgentResult:
         state_ref: StateReference | None = None
         try:
+            previous_state = await self.dependencies.checkpoint_store.load(
+                identity=context.checkpoint
+            )
+            failure_state = {
+                "phase": "failed",
+                "agent_type": execution.agent_type,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+            if previous_state is not None:
+                failure_state["last_workflow_state"] = previous_state
             checkpoint_id = await self.dependencies.checkpoint_store.save(
                 identity=context.checkpoint,
-                state={
-                    "phase": "failed",
-                    "agent_type": execution.agent_type,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                },
+                state=failure_state,
             )
             state_ref = StateReference(
                 namespace=context.checkpoint.agent_type,

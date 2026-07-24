@@ -9,6 +9,8 @@ Added a modular `agent_platform` package that generalizes the existing planning-
 - Common `BaseAgent` lifecycle interface.
 - Typed common contracts for requests, results, artifacts, state references, errors, statuses, and next actions.
 - Independent Planning, Coding, and Verification Agent modules with config, state, workflow, request, and result models.
+- Separately compiled Planning, Coding, and Verification LangGraph workflows with typed runtime
+  context, per-node state persistence, and no cross-agent graph state.
 - Registry-backed `AgentFactory` with default builder registration and no agent-type conditional chain.
 - Lightweight `AgentOrchestrator` that creates context, emits lifecycle events, persists results, converts failures into structured results, and routes by `AgentNextAction`.
 - Bounded `AgentFlowOrchestrator` for planning, coding, verification, rework, and retry sequences,
@@ -60,11 +62,10 @@ Results:
 
 - Ruff: passed.
 - Focused platform and flow tests: 47 passed.
-- Full test suite with PostgreSQL integrations enabled: 194 passed, 2 skipped, 4 existing
+- Full test suite with PostgreSQL integrations enabled: 197 passed, 2 skipped, 4 existing
   warnings.
 
 ## Remaining Follow-Up
 
-- Expand internal LangGraph workflows inside each agent without coupling agents into one graph.
 - Add richer verification skills for acceptance matrix, regression risk, security/config review, and test adequacy.
 - Add integration tests against live OpenProject/Neo4j/Weaviate for platform-driven projections.
