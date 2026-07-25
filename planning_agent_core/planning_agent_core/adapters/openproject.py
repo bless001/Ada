@@ -208,10 +208,19 @@ class OpenProjectClient:
                         artifact_mapping.artifact_id if artifact_mapping else None
                     ),
                 )
+                update_payload = payload
+                if (
+                    "lockVersion" not in update_payload
+                    and before_payload.get("lockVersion") is not None
+                ):
+                    update_payload = {
+                        **update_payload,
+                        "lockVersion": before_payload["lockVersion"],
+                    }
                 response = await self.request(
                     "PATCH",
                     f"/work_packages/{target_external_id}",
-                    json=payload,
+                    json=update_payload,
                 )
             else:
                 response = await self.request(

@@ -28,6 +28,8 @@ from planning_agent_core.agent_platform.orchestration.orchestrator import (
 )
 from planning_agent_core.application.openproject_mapping import (
     OpenProjectSemanticMapper,
+    OpenProjectSemanticMapping,
+    OpenProjectSemanticStatus,
 )
 from planning_agent_core.application.openproject_verification import (
     VerificationOpenProjectTarget,
@@ -77,7 +79,7 @@ class VerificationOpenProjectProjectionService:
             request=request,
             result=outcome.result,
         )
-        await self._execute(target, operations)
+        await self._execute(target, operations, config=config)
         return VerificationProjectionOutcome(
             projected=True,
             reason="Verification status and evidence projected to OpenProject.",
@@ -128,7 +130,7 @@ class VerificationOpenProjectProjectionService:
             result=result,
             override=override,
         )
-        await self._execute(target, operations)
+        await self._execute(target, operations, config=config)
         return VerificationProjectionOutcome(
             projected=True,
             reason="Verification override status and audit projected to OpenProject.",
@@ -140,11 +142,16 @@ class VerificationOpenProjectProjectionService:
         self,
         target: VerificationOpenProjectTarget,
         operations: list[VerificationProjectionOperation],
+        *,
+        config: VerificationAgentConfig,
     ) -> None:
         if self.gateway is None:
             raise AssertionError("OpenProject gateway disappeared during projection")
         catalog = await self.gateway.load_resource_catalog()
-        mapper = OpenProjectSemanticMapper(catalog=catalog)
+        mapper = OpenProjectSemanticMapper(
+            catalog=catalog,
+            mapping=_semantic_mapping(config),
+        )
 
         for operation in operations:
             if operation.markdown is not None:
@@ -179,6 +186,26 @@ class VerificationOpenProjectProjectionService:
 
 def _skipped(reason: str) -> VerificationProjectionOutcome:
     return VerificationProjectionOutcome(projected=False, reason=reason)
+
+
+def _semantic_mapping(
+    config: VerificationAgentConfig,
+) -> OpenProjectSemanticMapping:
+    default = OpenProjectSemanticMapping()
+    status_names = dict(default.status_names_by_semantic_status)
+    status_names.update(
+        {
+            OpenProjectSemanticStatus.VERIFIED: config.openproject_verified_status_name,
+            OpenProjectSemanticStatus.CHANGES_REQUIRED: (
+                config.openproject_changes_required_status_name
+            ),
+            OpenProjectSemanticStatus.BLOCKED: config.openproject_blocked_status_name,
+            OpenProjectSemanticStatus.DONE: config.openproject_override_status_name,
+        }
+    )
+    return OpenProjectSemanticMapping(
+        status_names_by_semantic_status=status_names,
+    )
 
 
 __all__ = [

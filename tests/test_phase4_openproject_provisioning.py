@@ -57,6 +57,7 @@ def test_openproject_provisioner_writes_non_secret_discovery_report():
         '"webhook"',
         '"starter_project"',
         '"project_modules"',
+        '"project_work_package_types"',
         '"project_role"',
         '"sample_binding"',
         '"warnings"',
@@ -74,6 +75,7 @@ def test_openproject_provisioner_ensures_project_binding_and_permissions():
 
     for function_name in [
         "ensure_project_modules!",
+        "ensure_project_work_package_types!",
         "ensure_project_role_for_bot!",
         "ensure_sample_project_binding!",
     ]:

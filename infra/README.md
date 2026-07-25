@@ -26,7 +26,7 @@ admin permissions for the bot
 OpenProject API token for the bot
 OpenProject webhook pointing to agent-webhook
 optional starter OpenProject project
-optional starter project module and repository binding metadata
+optional starter project modules, work package types, and repository binding metadata
 ```
 
 The API token is saved in a Docker volume and mounted read-only into planning-agent-core:
@@ -41,7 +41,7 @@ The provisioner also writes a discovery report to the same Docker volume:
 /agent-secrets/openproject_provisioning.json
 ```
 
-That report records discovered OpenProject IDs for required work package types, semantic statuses, priorities, recommended agent custom fields, webhook configuration, bot role/permission setup, and optional starter project binding. It is intentionally name-based; the agent code should not assume numeric OpenProject IDs.
+That report records discovered OpenProject IDs for required work package types, semantic statuses, priorities, recommended agent custom fields, webhook configuration, bot role/permission setup, starter-project work package type enablement, and optional starter project binding. It is intentionally name-based; the agent code should not assume numeric OpenProject IDs.
 
 So you do **not** need to manually create a bot user, API token, or webhook in the OpenProject UI.
 

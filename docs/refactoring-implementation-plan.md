@@ -325,7 +325,8 @@ Objective: make the system operable from a clean clone and prove the sample flow
 
 Tasks:
 
-- Add E2E test using `sample_project` and a test OpenProject project.
+- Complete: add an opt-in E2E test using `sample_project`, real PostgreSQL, and a provisioned test
+  OpenProject project; see `docs/phase-9-e2e-results.md`.
 - Add `infra/scripts/smoke_test.py` covering service readiness and a minimal planning-to-verification path.
 - Add operations, troubleshooting, testing, data model, OpenProject integration, and architecture docs.
 - Update Compose services to match the README: `agent-trigger`, `agent-worker`, optional `agent-api`, Postgres, Redis, Neo4j, Weaviate, and OpenProject.
