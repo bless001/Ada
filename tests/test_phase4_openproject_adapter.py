@@ -808,6 +808,7 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_update
     reconciliation_store = FakeReconciliationStore()
     before_payload = {
         "id": 34,
+        "lockVersion": 7,
         "subject": "Human subject",
         "description": {"raw": "Human description"},
         "_links": {
@@ -864,6 +865,10 @@ async def test_openproject_adapter_records_reconciliation_snapshot_before_update
         "/work_packages/34/activities",
         "/work_packages/34",
     ]
+    assert http_client.requests[2]["json"] == {
+        **agent_payload,
+        "lockVersion": 7,
+    }
     assert artifact_store.mapping_calls[0]["project_id"] == local_project_id
     assert artifact_store.mapping_calls[0]["node_identity_id"] == node_identity_id
     assert artifact_store.mapping_calls[0]["external_payload"] == before_payload

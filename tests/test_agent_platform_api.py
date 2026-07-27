@@ -184,6 +184,18 @@ def test_database_platform_service_includes_production_transition_resolver():
     )
 
 
+def test_database_platform_service_accepts_injected_work_package_gateway():
+    db = object()
+    gateway = object()
+
+    service = create_agent_platform_service_for_db(
+        db,
+        work_package_gateway=gateway,
+    )
+
+    assert service.dependencies.work_package_gateway is gateway
+
+
 @pytest.mark.asyncio
 async def test_execute_agent_uses_default_config_and_service(monkeypatch):
     fake_service = FakeAgentPlatformService()

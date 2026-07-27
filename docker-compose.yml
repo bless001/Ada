@@ -319,13 +319,13 @@ services:
   #     - ca_net
 
   # -------------------------------------------------------------------------
-  # Planning Agent Core
-  # The main planning agent service
+  # Agent Core
+  # The main agent service
   # -------------------------------------------------------------------------
-  planning-agent-core:
+  agent-core:
     build:
       context: ./agent_core
-    container_name: ca-planning-agent-core
+    container_name: ca-agent-core
     restart: unless-stopped
     command: ["uvicorn", "agent_core.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:

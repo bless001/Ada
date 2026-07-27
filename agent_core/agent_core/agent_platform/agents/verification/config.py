@@ -34,6 +34,10 @@ class VerificationAgentConfig(AgentConfig):
     warn_on_missing_rollback: bool = False
     security_review_enabled: bool = True
     openproject_projection_enabled: bool = True
+    openproject_verified_status_name: str = "Verified"
+    openproject_changes_required_status_name: str = "Changes required"
+    openproject_blocked_status_name: str = "Blocked"
+    openproject_override_status_name: str = "Done"
     human_override_enabled: bool = False
     human_override_allowed_verdicts: list[VerificationVerdict] = Field(
         default_factory=lambda: [VerificationVerdict.CHANGES_REQUESTED]
@@ -56,6 +60,18 @@ class VerificationAgentConfig(AgentConfig):
         if len(value) != len(set(value)):
             raise ValueError("human_override_allowed_verdicts cannot contain duplicates")
         return value
+
+    @field_validator(
+        "openproject_verified_status_name",
+        "openproject_changes_required_status_name",
+        "openproject_blocked_status_name",
+        "openproject_override_status_name",
+    )
+    @classmethod
+    def openproject_status_names_cannot_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("OpenProject status names cannot be blank")
+        return value.strip()
 
     @model_validator(mode="after")
     def enabled_override_requires_an_eligible_verdict(self) -> "VerificationAgentConfig":

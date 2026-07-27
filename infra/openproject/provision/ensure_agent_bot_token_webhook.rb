@@ -515,6 +515,37 @@ rescue StandardError => e
 end
 
 
+def ensure_project_work_package_types!(project)
+  return {} unless project
+
+  type_model = constant_named("Type")
+  unless type_model && project.respond_to?(:types) && project.respond_to?(:types=)
+    warn_provisioning("Could not ensure starter project work package types; the project type association is unavailable.")
+    return REQUIRED_TYPE_NAMES.each_with_object({}) do |type_name, output|
+      output[type_name] = { "available" => false, "enabled" => false, "name" => type_name }
+    end
+  end
+
+  required_types = REQUIRED_TYPE_NAMES.filter_map { |type_name| find_named_record(type_model, type_name) }
+  current_types = Array(project.types)
+  project.types = (current_types + required_types).uniq { |type| record_id(type) }
+  project.save!
+  enabled_type_ids = Array(project.types).map { |type| record_id(type) }
+
+  REQUIRED_TYPE_NAMES.each_with_object({}) do |type_name, output|
+    type = find_named_record(type_model, type_name)
+    output[type_name] = resource_summary(type, type_name).merge(
+      "enabled" => !type.nil? && enabled_type_ids.include?(record_id(type))
+    )
+  end
+rescue StandardError => e
+  warn_provisioning("Could not ensure starter project work package types: #{e.class}: #{e.message}")
+  REQUIRED_TYPE_NAMES.each_with_object({}) do |type_name, output|
+    output[type_name] = { "available" => false, "enabled" => false, "name" => type_name }
+  end
+end
+
+
 def ensure_project_role_for_bot!(project, bot)
   return { "assigned" => false, "reason" => "bot_admin" } if admin_user?(bot)
 
@@ -646,7 +677,7 @@ def write_json_file!(path, payload)
 end
 
 
-def write_provisioning_report!(bot:, token_file:, webhook:, starter_project:, discoveries:, custom_fields:, project_modules:, project_role:, sample_binding:)
+def write_provisioning_report!(bot:, token_file:, webhook:, starter_project:, discoveries:, custom_fields:, project_modules:, project_work_package_types:, project_role:, sample_binding:)
   payload = {
     "generated_at" => Time.now.utc.iso8601,
     "bot_user" => {
@@ -663,6 +694,7 @@ def write_provisioning_report!(bot:, token_file:, webhook:, starter_project:, di
     "webhook" => webhook_summary(webhook),
     "starter_project" => project_summary(starter_project),
     "project_modules" => project_modules,
+    "project_work_package_types" => project_work_package_types,
     "project_role" => project_role,
     "sample_binding" => sample_binding,
     "warnings" => $provisioning_warnings.uniq
@@ -686,6 +718,7 @@ custom_fields = ensure_custom_fields!
 webhook = ensure_agent_webhook!
 starter_project = ensure_starter_project!(bot)
 project_modules = ensure_project_modules!(starter_project)
+project_work_package_types = ensure_project_work_package_types!(starter_project)
 project_role = ensure_project_role_for_bot!(starter_project, bot)
 sample_binding = ensure_sample_project_binding!(starter_project)
 
@@ -697,6 +730,7 @@ write_provisioning_report!(
   discoveries: discoveries,
   custom_fields: custom_fields,
   project_modules: project_modules,
+  project_work_package_types: project_work_package_types,
   project_role: project_role,
   sample_binding: sample_binding
 )

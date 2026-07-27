@@ -66,6 +66,7 @@ class FakeWorkPackageGateway:
                 "Changes required": "/api/v3/statuses/9",
                 "Blocked": "/api/v3/statuses/10",
                 "Done": "/api/v3/statuses/11",
+                "Closed": "/api/v3/statuses/12",
             }
         )
 
@@ -284,6 +285,36 @@ async def test_verification_projection_maps_verdict_and_evidence_idempotently(
                 ),
             }
         },
+    }
+
+
+@pytest.mark.asyncio
+async def test_verification_projection_uses_configured_status_name():
+    gateway = FakeWorkPackageGateway()
+    projector = VerificationOpenProjectProjectionService(gateway)
+    request = _request()
+    execution = _execution(request)
+    execution = execution.model_copy(
+        update={
+            "config": execution.config.model_copy(
+                update={
+                    "settings": {
+                        **execution.config.settings,
+                        "openproject_verified_status_name": "Closed",
+                    }
+                }
+            )
+        }
+    )
+
+    await projector.project_execution(
+        execution,
+        _outcome(_result(request, VerificationVerdict.PASSED)),
+    )
+
+    assert gateway.updates[0]["payload"]["_links"]["status"] == {
+        "href": "/api/v3/statuses/12",
+        "title": "Closed",
     }
 
 
